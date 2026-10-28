@@ -6,7 +6,7 @@ imports fresh code from this folder and starts one new Controller.
 """
 
 
-def launch(root, open_manager=True):
+def launch(root, open_manager=True, **start_options):
     import importlib
     import importlib.util
     import sys
@@ -38,7 +38,7 @@ def launch(root, open_manager=True):
         controller = importlib.import_module(package_name + ".controller")
         candidate = controller.Controller(root)
         state.owner = candidate
-        candidate.start(open_manager=open_manager)
+        candidate.start(open_manager=open_manager, **start_options)
         return candidate
     except Exception:
         if candidate is not None:

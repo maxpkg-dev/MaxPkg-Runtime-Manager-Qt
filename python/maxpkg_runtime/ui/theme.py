@@ -12,6 +12,8 @@ from . import icons
 
 DEFAULT_THEME = "default"
 NATIVE_TOOLBAR_THEME = "max-native"
+ICON_TEXT_GAP = 4  # extra space between a button icon and its text, on top of Qt's own gap
+ICON_NUDGE = 1  # px a button icon moves down to line up with the optical center of its text
 _RGBA = re.compile(r"rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)")
 _TOKEN = re.compile(r"@([A-Za-z][A-Za-z0-9]*)")
 
@@ -160,6 +162,13 @@ class ThemeService(QtCore.QObject):
             self._bindings.append((widget, name, token, size))
         self._apply(widget, name, token, size)
 
+    def reapply(self, widget):
+        """Redraw a bound icon after the button's text or layout direction changed (the gap side moves)."""
+        for binding in self._bindings:
+            if binding[0] is widget:
+                self._apply(*binding)
+                return
+
     def unbind_all(self):
         self._bindings = []
 
@@ -167,8 +176,23 @@ class ThemeService(QtCore.QObject):
         dpr = widget.devicePixelRatioF() if hasattr(widget, "devicePixelRatioF") else 1.0
         color = self.manager.color(token)
         if isinstance(widget, QtWidgets.QAbstractButton):
-            widget.setIcon(icons.icon(name, color, size, dpr))
-            widget.setIconSize(QtCore.QSize(size, size))
+            if widget.text():
+                # Qt's own icon-text gap is a fixed ~4 px: pad the icon on the text side so they never touch.
+                # Next to text the glyph also sits ICON_NUDGE px lower: text looks centered below its line box.
+                glyph = icons.pixmap(name, color, size, dpr)
+                nudge = int(round(ICON_NUDGE * dpr))
+                padded = QtGui.QPixmap(int(round((size + ICON_TEXT_GAP) * dpr)), glyph.height() + 2 * nudge)
+                padded.fill(QtCore.Qt.transparent)
+                painter = QtGui.QPainter(padded)
+                icon_on_right = widget.layoutDirection() == QtCore.Qt.RightToLeft
+                painter.drawPixmap(padded.width() - glyph.width() if icon_on_right else 0, 2 * nudge, glyph)
+                painter.end()
+                padded.setDevicePixelRatio(dpr)
+                widget.setIcon(QtGui.QIcon(padded))
+                widget.setIconSize(QtCore.QSize(size + ICON_TEXT_GAP, size + 2 * ICON_NUDGE))
+            else:
+                widget.setIcon(icons.icon(name, color, size, dpr))
+                widget.setIconSize(QtCore.QSize(size, size))
         else:
             widget.setPixmap(icons.pixmap(name, color, size, dpr))
 

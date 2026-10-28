@@ -3,15 +3,21 @@
 Layout, texts and responsive breakpoints follow the HTML Manager 1.2.0 (docs/ORIGINAL-SPEC.md).
 """
 
-from ..qt_compat import QShortcut, QtCore, QtGui, QtWidgets, Qt, Signal, exec_menu, is_valid
+import math
+import os
+
+from ..services import max_api
+from ..qt_compat import (QShortcut, QtCore, QtGui, QtWidgets, Qt, Signal, disable_max_accelerators, exec_menu,
+                         is_valid)
 from . import icons
 from .details import SINGLE_COLUMN, DetailsPage
 from .dialogs import confirm
-from .frame import EDGE, WindowChrome, apply_native_frame, bounded_position, paint_window_shape, prepare_window
+from .frame import (EDGE, WindowChrome, apply_native_frame, bounded_position, glass_border, native_event,
+                    paint_window_shape, prepare_window)
 from .pages import WIDE_DISCOVER, DiscoverPage, InstalledPage
 from .settings_panel import SettingsPanel
-from .widgets import (Button, ClearableDropdown, IconButton, IconLabel, SearchBox, add_action, hbox, label,
-                      themed_menu, vbox)
+from .widgets import (BrandLogo, Button, ClearableDropdown, IconButton, IconLabel, SearchBox, SlideView, add_action,
+                      hbox, label, themed_menu, vbox)
 
 MIN_WIDTH = 680
 HEADER_ICON_ONLY = 800  # 720 in the HTML Manager; the header now also holds the window buttons
@@ -75,6 +81,260 @@ class Toast(QtWidgets.QFrame):
         self._expire()
 
 
+def _ease(progress):
+    return 1.0 - (1.0 - progress) ** 3
+
+
+def _round_pen(color, width):
+    pen = QtGui.QPen(color, width)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    return pen
+
+
+def _partial(points, fraction):
+    """The first `fraction` (0..1) of a polyline, by length."""
+    if fraction <= 0:
+        return []
+    lengths = [math.hypot(end[0] - start[0], end[1] - start[1]) for start, end in zip(points, points[1:])]
+    left = sum(lengths) * min(1.0, fraction)
+    drawn = [points[0]]
+    for (start, end), length in zip(zip(points, points[1:]), lengths):
+        if left >= length:
+            drawn.append(end)
+            left -= length
+        else:
+            share = left / length if length else 0.0
+            drawn.append((start[0] + (end[0] - start[0]) * share, start[1] + (end[1] - start[1]) * share))
+            break
+    return drawn
+
+
+class StatusIcon(QtWidgets.QWidget):
+    """Animated operation icon drawn with QPainter, the same as TerraScoop's build card (QtSvg plays almost no SVG
+    animation). running: the Lucide box draws itself (outline, inner edges, a pulse, a fade, again);
+    done: the circle and then the tick draw in with a small spring; error: the alert icon draws in and shakes.
+    The timer runs only while something moves.
+    """
+
+    SIZE = 44
+    FPS = 30
+    DONE_SECONDS = 0.9
+    ERROR_SECONDS = 0.9
+    LOOP = 2.4  # seconds per drawing loop of the box
+    # Lucide "box" on its 24-unit grid: the outline (a hexagon) and the inner edges.
+    BOX_OUTLINE = ((12, 2), (21, 7), (21, 17), (12, 22), (3, 17), (3, 7), (12, 2))
+    BOX_INNER = (((3, 7), (12, 12), (21, 7)), ((12, 12), (12, 22)))
+
+    def __init__(self, themes, parent=None):
+        QtWidgets.QWidget.__init__(self, parent)
+        self.themes = themes
+        self._state = "running"
+        self._clock = QtCore.QElapsedTimer()
+        self._clock.start()
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(int(1000 / self.FPS))
+        self._timer.timeout.connect(self._tick)
+
+    def set_state(self, state):
+        """'running', 'done' or 'error'."""
+        self._state = state
+        self._clock.restart()
+        if self.isVisible():
+            self._timer.start()
+        self.update()
+
+    def state(self):
+        return self._state
+
+    def _elapsed(self):
+        return self._clock.elapsed() / 1000.0
+
+    def _tick(self):
+        finished = self.DONE_SECONDS if self._state == "done" else self.ERROR_SECONDS
+        if self._state != "running" and self._elapsed() > finished + 0.2:
+            self._timer.stop()
+        self.update()
+
+    def showEvent(self, event):
+        QtWidgets.QWidget.showEvent(self, event)
+        self._timer.start()
+
+    def hideEvent(self, event):
+        self._timer.stop()
+        QtWidgets.QWidget.hideEvent(self, event)
+
+    def paintEvent(self, _event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        theme = self.themes.manager
+        elapsed = self._elapsed()
+        if self._state == "running":
+            self._paint_running(painter, elapsed, theme.color("accent"))
+        elif self._state == "done":
+            self._paint_done(painter, min(1.0, elapsed / self.DONE_SECONDS), theme.color("success"))
+        else:
+            self._paint_error(painter, min(1.0, elapsed / self.ERROR_SECONDS), theme.color("danger"))
+        painter.end()
+
+    def _paint_running(self, painter, elapsed, accent):
+        phase = (elapsed % self.LOOP) / self.LOOP
+        outline = _ease(min(1.0, phase / 0.45))
+        inner = _ease(max(0.0, min(1.0, (phase - 0.35) / 0.3)))
+        pulse = 1.0 + 0.06 * math.sin(max(0.0, min(1.0, (phase - 0.7) / 0.15)) * math.pi) if phase > 0.7 else 1.0
+        alpha = 1.0 if phase < 0.88 else max(0.0, 1.0 - (phase - 0.88) / 0.12)
+        painter.translate(self.SIZE / 2.0, self.SIZE / 2.0)
+        painter.scale(pulse * self.SIZE / 26.0, pulse * self.SIZE / 26.0)
+        painter.translate(-12.0, -12.0)
+        faint = QtGui.QColor(accent)
+        faint.setAlpha(40)
+        painter.setPen(_round_pen(faint, 1.6))
+        for line in self._box_paths(1.0, 1.0):
+            painter.drawPolyline(QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in line]))
+        color = QtGui.QColor(accent)
+        color.setAlphaF(alpha)
+        painter.setPen(_round_pen(color, 1.9))
+        for line in self._box_paths(outline, inner):
+            if len(line) > 1:
+                painter.drawPolyline(QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in line]))
+
+    def _box_paths(self, outline, inner):
+        """The box's lines, each cut to the drawn fraction."""
+        paths = [_partial(self.BOX_OUTLINE, outline)]
+        paths.extend(_partial(line, inner) for line in self.BOX_INNER)
+        return paths
+
+    def _paint_done(self, painter, progress, color):
+        eased = _ease(progress)
+        spring = 1.0 + 0.07 * math.sin(max(0.0, (progress - 0.66) / 0.34) * math.pi) if progress > 0.66 else 1.0
+        painter.translate(self.SIZE / 2.0, self.SIZE / 2.0)
+        painter.scale(spring, spring)
+        painter.translate(-self.SIZE / 2.0, -self.SIZE / 2.0)
+        ring = QtCore.QRectF(4, 4, self.SIZE - 8, self.SIZE - 8)  # room for the spring
+        painter.setPen(_round_pen(color, 2.6))
+        painter.drawArc(ring, 90 * 16, int(-360.0 * min(1.0, eased / 0.6) * 16))
+        tick = max(0.0, min(1.0, (eased - 0.45) / 0.45))
+        if tick > 0:
+            # Lucide circle-check's tick on a 24 grid, scaled to the icon.
+            scale = (self.SIZE - 8) / 20.0
+            points = [QtCore.QPointF(4 + (x - 2) * scale, 4 + (y - 2) * scale)
+                      for x, y in ((8.5, 12.0), (11.0, 14.5), (15.5, 9.5))]
+            first = math.hypot(points[1].x() - points[0].x(), points[1].y() - points[0].y())
+            second = math.hypot(points[2].x() - points[1].x(), points[2].y() - points[1].y())
+            length = (first + second) * tick
+            path = QtGui.QPainterPath(points[0])
+            if length <= first:
+                path.lineTo(points[0] + (points[1] - points[0]) * (length / first))
+            else:
+                path.lineTo(points[1])
+                path.lineTo(points[1] + (points[2] - points[1]) * ((length - first) / second))
+            painter.setPen(_round_pen(color, 3.0))
+            painter.drawPath(path)
+
+    def _paint_error(self, painter, progress, color):
+        """The circle draws in, the "!" is drawn from the top, its dot pops in, and the icon shakes."""
+        ring_part = _ease(min(1.0, progress / 0.45))
+        bar_part = _ease(max(0.0, min(1.0, (progress - 0.35) / 0.3)))
+        shake = math.sin((progress - 0.45) * math.pi * 8) * 4.5 * (1.0 - progress) if progress > 0.45 else 0.0
+        painter.translate(shake, 0)
+        ring = QtCore.QRectF(4, 4, self.SIZE - 8, self.SIZE - 8)
+        painter.setPen(_round_pen(color, 2.6))
+        painter.drawArc(ring, 90 * 16, int(-360.0 * ring_part * 16))
+        middle = self.SIZE / 2.0
+        painter.setPen(_round_pen(color, 3.0))
+        if bar_part > 0:
+            painter.drawLine(QtCore.QPointF(middle, 13.5), QtCore.QPointF(middle, 13.5 + 11.0 * bar_part))
+        if progress > 0.68:
+            painter.drawPoint(QtCore.QPointF(middle, 31.0))
+
+
+class WorkShade(QtWidgets.QWidget):
+    """Frosted backdrop for package operations: a blurred snapshot of the window under a theme tint."""
+
+    BLUR = 12  # the snapshot is shrunk by this factor and smoothly scaled back up
+
+    def __init__(self, themes, parent=None):
+        QtWidgets.QWidget.__init__(self, parent)
+        self.themes = themes
+        self._backdrop = None
+
+    def set_backdrop(self, snapshot):
+        width = max(1, snapshot.width() // self.BLUR)
+        height = max(1, snapshot.height() // self.BLUR)
+        small = snapshot.scaled(width, height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        self._backdrop = small.scaled(snapshot.width(), snapshot.height(), Qt.IgnoreAspectRatio,
+                                      Qt.SmoothTransformation)
+        self.update()
+
+    def paintEvent(self, _event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        if self._backdrop is not None:
+            painter.drawPixmap(self.rect(), self._backdrop)
+        painter.fillRect(self.rect(), self.themes.manager.color("overlay"))
+        painter.end()
+
+
+class BusyCard(QtWidgets.QFrame):
+    """Glass card shown while a package operation runs: animated icon, message and a calm hint.
+
+    Painted here (not QSS) so the glass can be nearly opaque: theme surfaces at ~92% over the frosted backdrop.
+    """
+
+    def __init__(self, themes, parent=None):
+        QtWidgets.QFrame.__init__(self, parent)
+        self.setObjectName("BusyCard")
+        self.themes = themes
+        self.setFixedWidth(300)
+        self.icon = StatusIcon(themes)
+        self.title = label("Working...", "BusyTitle", wrap=True)
+        self.hint = label("", "BusyHint", wrap=True)
+        for text in (self.title, self.hint):
+            text.setAlignment(Qt.AlignCenter)
+        layout = vbox(spacing=6, margins=(24, 22, 24, 20))
+        layout.addWidget(self.icon, 0, Qt.AlignHCenter)
+        layout.addSpacing(6)
+        layout.addWidget(self.title)
+        layout.addWidget(self.hint)
+        self.setLayout(layout)
+
+    def set_message(self, message):
+        """The operation is running."""
+        self.icon.set_state("running")
+        self.title.setText(message)
+        self.hint.setText("This usually takes a few seconds.")
+        self.adjustSize()
+
+    def show_result(self, kind, text):
+        """The operation ended: 'success' draws the tick, anything else the alert."""
+        self.icon.set_state("done" if kind == "success" else "error")
+        lines = (text or "").split("\n", 1)
+        self.title.setText(lines[0])
+        self.hint.setText(lines[1] if len(lines) > 1 else ("" if kind == "success" else "Nothing was changed."))
+        self.hint.setVisible(bool(self.hint.text()))
+        self.adjustSize()
+
+    def paintEvent(self, _event):
+        theme = self.themes.manager
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        rect = QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        top, bottom = QtGui.QColor(theme.color("surfaceRaised")), QtGui.QColor(theme.color("surfaceTertiary"))
+        top.setAlphaF(0.94)
+        bottom.setAlphaF(0.9)
+        gradient = QtGui.QLinearGradient(rect.topLeft(), rect.bottomLeft())
+        gradient.setColorAt(0.0, top)
+        gradient.setColorAt(1.0, bottom)
+        painter.setPen(QtGui.QPen(theme.color("borderStrong"), 1))
+        painter.setBrush(QtGui.QBrush(gradient))
+        painter.drawRoundedRect(rect, 18, 18)
+        highlight = QtGui.QColor(255, 255, 255, 30)  # the bright top edge of the glass
+        painter.setPen(QtGui.QPen(highlight, 1))
+        painter.drawLine(QtCore.QPointF(rect.left() + 18, rect.top() + 1), QtCore.QPointF(rect.right() - 18, rect.top() + 1))
+        painter.end()
+
+
 class ScreenshotPreview(QtWidgets.QWidget):
     """Full-window screenshot viewer with previous/next and close (Esc)."""
 
@@ -85,32 +345,47 @@ class ScreenshotPreview(QtWidgets.QWidget):
         self.manager_window = window
         self.shots = shots
         self.index = index
-        self.image = QtWidgets.QLabel(self)
-        self.image.setAlignment(Qt.AlignCenter)
+        images = window.images
+        self.image = SlideView(len(shots), lambda position: images.get(shots[position].url), window.themes,
+                               inset=70, parent=self)
+        self.image.set_index(index)
+        self.image.index_changed.connect(self._on_index)
         self.caption = label("", "ToastText", parent=self)
         self.caption.setAlignment(Qt.AlignCenter)
         self.buttons = []
         for icon_name, step in (("gallery-chevron-left", -1), ("gallery-chevron-right", 1), ("x", 0)):
             button = QtWidgets.QPushButton(self)
             button.setObjectName("GalleryNav")
+            button.setProperty("large", "true")  # perfectly round 40 px buttons in the lightbox
+            button.setFixedSize(40, 40)
             button.setCursor(Qt.PointingHandCursor)
+            button.setFocusPolicy(Qt.NoFocus)  # keep the keyboard on the lightbox (Esc, arrows)
             window.themes.bind_icon(button, icon_name, "textStrong", 20)
             button.clicked.connect(lambda _checked=False, delta=step: self._step(delta))
             self.buttons.append(button)
         window.images.ready.connect(lambda _source: self._paint())
         self.setFocusPolicy(Qt.StrongFocus)
+        # 3ds Max accelerators swallow Esc and the arrow keys before Qt sees them.
+        disable_max_accelerators(self)
         self.setGeometry(window.content_rect())
         self.show()
         self.raise_()
-        self.setFocus()
+        self.activateWindow()
+        self.setFocus(Qt.OtherFocusReason)
         self._paint()
+
+    def close_preview(self):
+        self.hide()
+        self.deleteLater()
 
     def _step(self, delta):
         if delta == 0:
-            self.hide()
-            self.deleteLater()
+            self.close_preview()
             return
-        self.index = (self.index + delta) % len(self.shots)
+        self.image.slide(delta)  # animated; _on_index follows when it lands
+
+    def _on_index(self, index):
+        self.index = index
         self._paint()
 
     def keyPressEvent(self, event):
@@ -126,21 +401,15 @@ class ScreenshotPreview(QtWidgets.QWidget):
         if not is_valid(self):
             return
         shot = self.shots[self.index]
-        pixmap = self.manager_window.images.get(shot.url)
-        area = self.rect().adjusted(70, 40, -70, -80)
-        self.image.setGeometry(area)
-        if pixmap is not None:
-            dpr = self.devicePixelRatioF()
-            scaled = pixmap.scaled(int(area.width() * dpr), int(area.height() * dpr), Qt.KeepAspectRatio,
-                                   Qt.SmoothTransformation)
-            scaled.setDevicePixelRatio(dpr)
-            self.image.setPixmap(scaled)
+        # Full width so slides cross the whole lightbox; images are fitted 70 px in from each side.
+        self.image.setGeometry(self.rect().adjusted(0, 40, 0, -80))
+        self.image.refresh()
         self.caption.setText("<b>{}</b><br>{}".format(shot.title, shot.caption))
         self.caption.setGeometry(70, self.height() - 74, self.width() - 140, 60)
-        middle = self.height() // 2 - 18
+        middle = self.height() // 2 - 20
         self.buttons[0].move(18, middle)
-        self.buttons[1].move(self.width() - 54, middle)
-        self.buttons[2].move(self.width() - 54, 14)
+        self.buttons[1].move(self.width() - 58, middle)
+        self.buttons[2].move(self.width() - 58, 14)
 
     def resizeEvent(self, event):
         QtWidgets.QWidget.resizeEvent(self, event)
@@ -174,7 +443,7 @@ class ManagerWindow(QtWidgets.QWidget):
         self._restoring = True
         self.setMinimumSize(MIN_WIDTH, 480)
         settings = runtime.settings
-        self.chrome = WindowChrome(self, "MaxPkg Manager " + runtime.version, themes,
+        self.chrome = WindowChrome(self, "MaxPkg Manager", themes,
                                    QtCore.QPoint(settings.manager_mini_x, settings.manager_mini_y),
                                    self._remember_mini_position)
         self._build()
@@ -189,11 +458,8 @@ class ManagerWindow(QtWidgets.QWidget):
         header = QtWidgets.QFrame()
         header.setObjectName("Header")
         header.setFixedHeight(68)
-        brand = QtWidgets.QLabel()
-        brand.setObjectName("BrandMark")
-        brand.setAlignment(Qt.AlignCenter)
-        themes.bind_icon(brand, "maxpkg-logo", "brandIcon", 24)
-        self.version_label = label("Runtime " + self.runtime.version, "BrandSubtitle")
+        brand = BrandLogo(themes)
+        self.version_label = label("Package Manager " + self.runtime.version, "BrandSubtitle")
         brand_text = vbox(label("maxpkg", "BrandTitle"), self.version_label, spacing=0, margins=(0, 2, 0, 2))
         self.configurator_button = Button("Toolbar Configurator", "panel-top", "default", themes)
         self.check_button = Button("Check Updates", "refresh-cw", "default", themes)
@@ -268,7 +534,7 @@ class ManagerWindow(QtWidgets.QWidget):
         self.website.setToolTip("Open maxpkg.dev in your browser")
         self.website.setLayoutDirection(Qt.RightToLeft)
         themes.bind_icon(self.website, "external-link", "successText", 11)
-        self.footer_version = label("Runtime " + self.runtime.version)
+        self.footer_version = label("Package Manager " + self.runtime.version)
         self.connection_status = label("Offline")
         status.setLayout(hbox(self.package_status, 12, self.update_status, None, self.website, None,
                               self.footer_version, 14, self.connection_status, spacing=0, margins=(14, 0, 14, 0)))
@@ -282,13 +548,15 @@ class ManagerWindow(QtWidgets.QWidget):
         self.setLayout(root)
         self.details_nav.hide()
 
-        self.busy = QtWidgets.QWidget(self)
-        self.busy.setObjectName("BusyShade")
-        self.busy.setAttribute(Qt.WA_StyledBackground)
-        self.busy_message = label("Working...", "BusyMessage", parent=self.busy)
-        self.busy_message.setAlignment(Qt.AlignCenter)
-        self.busy_message.setFixedWidth(240)
+        self.busy = WorkShade(themes, self)
+        self.busy_card = BusyCard(themes, self.busy)
         self.busy.hide()
+        # After an operation the card waits briefly for its result (runtime.notify follows busy_changed("")),
+        # shows the tick or the alert, then hides.
+        self._busy_finishing = False
+        self._busy_timer = QtCore.QTimer(self)
+        self._busy_timer.setSingleShot(True)
+        self._busy_timer.timeout.connect(self._hide_busy)
         self.settings_panel = SettingsPanel(self, self)
         self.settings_panel.uninstall_requested.connect(self._runtime_uninstall)
 
@@ -330,7 +598,11 @@ class ManagerWindow(QtWidgets.QWidget):
         self.search.selectAll()
 
     def _escape(self):
-        if self.tab == "details":
+        # The window-wide Esc shortcut wins over the lightbox's keyPressEvent, so close an open lightbox here first.
+        preview = getattr(self, "_preview", None)
+        if preview is not None and is_valid(preview) and preview.isVisible():
+            preview.close_preview()
+        elif self.tab == "details":
             self.details_back()
         elif self.search.hasFocus() and self.search.text():
             self.search.clear()
@@ -465,24 +737,33 @@ class ManagerWindow(QtWidgets.QWidget):
         QtWidgets.QWidget.leaveEvent(self, event)
 
     # --- painting ------------------------------------------------------------------
-    def paintEvent(self, _event):
-        """Theme gradient. Windows 11 rounds the window and adds the shadow (frame.apply_native_frame)."""
+    def background_brush(self):
+        """The window's theme gradient in window coordinates (also drawn by the pages' fading edges)."""
         theme = self.themes.manager
-        painter = QtGui.QPainter(self)
         gradient = QtGui.QLinearGradient(0, 0, self.width(), self.height())
         gradient.setColorAt(0.0, theme.color("backgroundGradientTop"))
         gradient.setColorAt(0.48, theme.color("surfaceSecondary"))
         gradient.setColorAt(1.0, theme.color("backgroundGradientBottom"))
-        paint_window_shape(self, painter, QtGui.QBrush(gradient), theme.color("borderStrong"))
+        return QtGui.QBrush(gradient)
+
+    def paintEvent(self, _event):
+        """Theme gradient. Windows 11 rounds the window and adds the shadow (frame.apply_native_frame)."""
+        theme = self.themes.manager
+        painter = QtGui.QPainter(self)
+        paint_window_shape(self, painter, self.background_brush(), glass_border(theme.color("surfaceSecondary")))
         painter.end()
+
+    def nativeEvent(self, event_type, message):
+        handled = native_event(self, message)
+        return handled if handled is not None else QtWidgets.QWidget.nativeEvent(self, event_type, message)
 
     def showEvent(self, event):
         QtWidgets.QWidget.showEvent(self, event)
-        apply_native_frame(self, self.themes.color("borderStrong"))
+        apply_native_frame(self, glass_border(self.themes.color("surfaceSecondary")))
 
     def apply_theme(self):
         self.setStyleSheet(self.themes.qss())
-        apply_native_frame(self, self.themes.color("borderStrong"))
+        apply_native_frame(self, glass_border(self.themes.color("surfaceSecondary")))
         self.update()
         if self.isVisible():
             self.refresh_pages()
@@ -601,7 +882,7 @@ class ManagerWindow(QtWidgets.QWidget):
 
     def preview_screenshots(self, shots, index):
         if shots:
-            ScreenshotPreview(self, shots, index)
+            self._preview = ScreenshotPreview(self, shots, index)
 
     def reset_toolbar_position(self):
         if self.toolbar is not None:
@@ -655,8 +936,15 @@ class ManagerWindow(QtWidgets.QWidget):
             self.installed_page.refresh()
 
     def _runtime_uninstall(self):
-        self.notify("Removing MaxPkg Runtime is not available in this preview build. Use the MaxScript Runtime "
-                    "(Settings > Uninstall) until the Qt Runtime replaces it.", "warning")
+        """Settings > Uninstall: run the installed uninstall.ms after this click has returned to the event loop
+        (it stops this Runtime, so it must not run inside the window's own handler)."""
+        script = os.path.join(str(self.runtime.root), "uninstall.ms")
+        if not os.path.isfile(script):
+            self.notify("uninstall.ms was not found next to the Package Manager.", "error")
+            return
+        self.settings_panel.close_panel()
+        self.close()
+        QtCore.QTimer.singleShot(0, lambda: max_api.file_in(script))
 
     # --- runtime -> view ----------------------------------------------------------------
     def _on_packages(self):
@@ -694,11 +982,23 @@ class ManagerWindow(QtWidgets.QWidget):
         if self.tab == "discover":
             self.discover_page.refresh()
 
+    BUSY_RESULT_WAIT_MS = 250
+    BUSY_DONE_MS = 1400
+    BUSY_ERROR_MS = 2600
+
     def _on_busy(self, message):
         if message:
+            self._busy_timer.stop()
+            self._busy_finishing = False
             self._show_busy(message)
-        else:
-            self.busy.hide()
+        elif self.busy.isVisible() and not self._busy_finishing and self.busy_card.icon.state() == "running":
+            # A result already on the card keeps its own timer; a second "operation ended" must not cut it short.
+            self._busy_finishing = True
+            self._busy_timer.start(self.BUSY_RESULT_WAIT_MS)
+
+    def _hide_busy(self):
+        self._busy_finishing = False
+        self.busy.hide()
 
     def _on_checking(self, checking):
         self.check_button.set_label("Checking updates..." if checking else "Check Updates")
@@ -712,17 +1012,28 @@ class ManagerWindow(QtWidgets.QWidget):
             self.details_page.refresh()
 
     def _show_busy(self, message):
-        self.busy_message.setText(message)
-        self.busy.setGeometry(self.content_rect())
+        self.busy_card.set_message(message)
+        area = self.content_rect()
+        if not self.busy.isVisible():
+            self.busy.set_backdrop(self.grab(area))  # what the frosted glass blurs
+        self.busy.setGeometry(area)
         self._place_busy()
         self.busy.show()
         self.busy.raise_()
 
     def _place_busy(self):
-        self.busy_message.adjustSize()
-        self.busy_message.move((self.busy.width() - self.busy_message.width()) // 2, int(self.busy.height() * 0.46))
+        card = self.busy_card
+        card.adjustSize()
+        card.move((self.busy.width() - card.width()) // 2, max(0, int(self.busy.height() * 0.42) - card.height() // 2))
 
     def notify(self, text, kind="info"):
+        if self._busy_finishing and kind in ("success", "error"):
+            self._busy_finishing = False
+            self.busy_card.show_result(kind, text)
+            self._place_busy()
+            self._busy_timer.start(self.BUSY_DONE_MS if kind == "success" else self.BUSY_ERROR_MS)
+            if kind == "success":
+                return  # the card already says it; errors keep their toast with the details
         toast = Toast(text, kind, self.themes, self)
         toast.show()
         self._toasts = [item for item in self._toasts if is_valid(item) and item.isVisible()] + [toast]

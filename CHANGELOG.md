@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0 (preview)
+## 2.0.0
 
 - Added: The Manager, toolbar and Settings run on the Qt and Python that ship with 3ds Max, without the embedded web browser.
 - Added: The window has its own rounded frame: drag the header to move it, double-click to maximise, collapse it to a small bar and open it again with one click.

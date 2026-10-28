@@ -9,7 +9,7 @@ itself is never destroyed while the Runtime runs. Package buttons look like the 
 from ..qt_compat import (QAction, QtCore, QtGui, QtWidgets, Qt, Signal, event_global_pos, exec_menu, is_valid,
                          max_main_window, screen_at)
 from . import icons
-from .frame import apply_native_frame
+from .frame import apply_native_frame, native_event
 from .widgets import add_action, themed_menu
 
 AREAS = {"top": Qt.TopToolBarArea, "bottom": Qt.BottomToolBarArea, "left": Qt.LeftToolBarArea,
@@ -41,7 +41,7 @@ class ToolbarStyle:
         if self.icon_only:
             self.length = ICON_LENGTHS[(self.icon_size_key, self.density)]
             self.button = QtCore.QSize(self.length, self.length)
-            self.icon = self.length - 8
+            self.icon = self.length - 4  # flat Max-style button: the icon fills it, 2 px air on each side
         else:
             height = TEXT_HEIGHTS[self.icon_size_key] - (4 if compact else 0)
             self.button = QtCore.QSize(TEXT_WIDTHS.get(self.button_size, 116), height)
@@ -124,11 +124,19 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
         hovered = self.underMouse() or self.isDown() or self._dragging
-        frame = QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        painter.setPen(QtGui.QPen(theme.color("buttonHoverBorder" if hovered else "buttonBorder"), 1))
-        painter.setBrush(theme.color("buttonHoverBackground" if hovered else "buttonBackground"))
-        painter.drawRoundedRect(frame, 4, 4)
         style = self.style_info
+        frame = QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if style.icon_only:
+            # Like 3ds Max's own toolbars: flat, no border; a soft highlight only under the mouse.
+            if hovered:
+                painter.setPen(Qt.NoPen)
+                highlight = theme.color("buttonHoverBackground")
+                painter.setBrush(highlight.darker(115) if self.isDown() else highlight)
+                painter.drawRoundedRect(frame, 3, 3)
+        else:
+            painter.setPen(QtGui.QPen(theme.color("buttonHoverBorder" if hovered else "buttonBorder"), 1))
+            painter.setBrush(theme.color("buttonHoverBackground" if hovered else "buttonBackground"))
+            painter.drawRoundedRect(frame, 4, 4)
         icon_rect = self._icon_rect()
         self._paint_icon(painter, icon_rect)
         if not style.icon_only:
@@ -174,33 +182,42 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         painter.drawText(rect, Qt.AlignCenter, self.item.initials[:2])
 
     def _paint_text(self, painter, icon_rect, hovered):
-        left = icon_rect.right() + 7
-        width = self.width() - left - 6
+        """Name (+ optional second line) centred on real glyph extents (cap height to descent), not on line
+        boxes: Segoe UI line boxes carry extra leading that pushed the HTML-sized text off centre."""
+        left = icon_rect.right() + 6
+        width = self.width() - left - 5
+        compact = self.height() <= 30
         name_font = QtGui.QFont(self.font())
-        name_font.setPixelSize(12)
+        name_font.setPixelSize(10 if compact else 11)
         name_font.setBold(True)
-        painter.setFont(name_font)
         color = self.theme.color("buttonHoverText" if hovered else "buttonText")
         title = self.item.title if not self.brand else "maxpkg"
         subtitle = "" if self.brand else self.item.subtitle
-        metrics = QtGui.QFontMetrics(name_font)
-        if subtitle:
-            sub_font = QtGui.QFont(self.font())
-            sub_font.setPixelSize(10)
-            sub_metrics = QtGui.QFontMetrics(sub_font)
-            block = metrics.height() + sub_metrics.height() - 2
-            top = (self.height() - block) // 2
-            painter.setPen(color)
-            painter.drawText(QtCore.QRect(left, top, width, metrics.height()), Qt.AlignLeft | Qt.AlignVCenter,
-                             metrics.elidedText(title, Qt.ElideRight, width))
-            painter.setFont(sub_font)
-            painter.setPen(self.theme.color("buttonSecondaryText"))
-            painter.drawText(QtCore.QRect(left, top + metrics.height() - 2, width, sub_metrics.height()),
-                             Qt.AlignLeft | Qt.AlignVCenter, sub_metrics.elidedText(subtitle, Qt.ElideRight, width))
-        else:
-            painter.setPen(color)
-            painter.drawText(QtCore.QRect(left, 0, width, self.height()), Qt.AlignLeft | Qt.AlignVCenter,
-                             metrics.elidedText(title, Qt.ElideRight, width))
+        name_metrics = QtGui.QFontMetricsF(name_font)
+        name_cap = name_metrics.capHeight()
+        painter.setFont(name_font)
+        painter.setPen(color)
+        if not subtitle:
+            baseline = (self.height() + name_cap) / 2.0
+            painter.drawText(QtCore.QPointF(left, baseline), name_metrics.elidedText(title, Qt.ElideRight, width))
+            return
+        sub_font = QtGui.QFont(self.font())
+        sub_font.setPixelSize(9)
+        sub_metrics = QtGui.QFontMetricsF(sub_font)
+        gap = 4.0 if not compact else 2.0
+        # Visible block: name caps + name descenders ("g", "y" must not touch the second line) + gap +
+        # second-line caps + part of its descenders.
+        name_descent = name_metrics.descent()
+        block = name_cap + name_descent + gap + sub_metrics.capHeight() + sub_metrics.descent() * 0.5
+        top = (self.height() - block) / 2.0
+        name_baseline = top + name_cap
+        sub_baseline = name_baseline + name_descent + gap + sub_metrics.capHeight()
+        painter.drawText(QtCore.QPointF(left, round(name_baseline)),
+                         name_metrics.elidedText(title, Qt.ElideRight, width))
+        painter.setFont(sub_font)
+        painter.setPen(self.theme.color("buttonSecondaryText"))
+        painter.drawText(QtCore.QPointF(left, round(sub_baseline)),
+                         sub_metrics.elidedText(subtitle, Qt.ElideRight, width))
 
     def _paint_badge(self, painter, text):
         font = QtGui.QFont(self.font())
@@ -371,6 +388,10 @@ class FloatingHost(QtWidgets.QWidget):
         self._drag_offset = None
         self._hover_grip = False
         self.setMouseTracking(True)
+
+    def nativeEvent(self, event_type, message):
+        handled = native_event(self, message)
+        return handled if handled is not None else QtWidgets.QWidget.nativeEvent(self, event_type, message)
 
     def showEvent(self, event):
         QtWidgets.QWidget.showEvent(self, event)

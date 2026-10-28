@@ -1,0 +1,7 @@
+name "MaxPkg Package Manager"
+description "Find, install, run and update 3ds Max scripts from maxpkg.dev"
+
+run "install.ms"
+drop "install.ms"
+
+clear temp on MAX exit

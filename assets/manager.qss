@@ -1,13 +1,16 @@
 /* MaxPkg Manager stylesheet. @tokens are replaced by colors of the active Manager theme
    (assets/themes/manager/*.ini). Sizes follow the HTML Manager 1.2.0 (ui/manager/manager.css). */
 
-#ManagerRoot, #ManagerRoot QWidget {
+/* Base font: a bare type selector (lowest specificity), so every #Id rule below can change size and color.
+   "#ManagerRoot QWidget" would outrank "#WelcomeTitle" and force 13 px everywhere. The sheet is applied
+   only to our own windows, so QWidget does not leak into 3ds Max. */
+QWidget {
     font-family: "Segoe UI", Arial, sans-serif;
     font-size: 13px;
     color: @textPrimary;
 }
 
-#ManagerRoot QToolTip {
+QToolTip {
     background: @surfaceTertiary;
     color: @textStrong;
     border: 1px solid @textDisabled;
@@ -18,22 +21,20 @@
 #TitleBar, #MiniBar { background: transparent; border: none; }
 #HeaderDivider { background: @borderDefault; border: none; }
 #WindowTitle { color: @accent; font-weight: bold; font-size: 10pt; }
-QPushButton#ChromeButton {
-    border: 1px solid transparent; border-radius: 4px; background: transparent; padding: 2px; min-height: 0;
+QPushButton#ChromeButton { min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px;
+    border: 1px solid transparent; border-radius: 14px; background: transparent; padding: 0;
 }
 QPushButton#ChromeButton:hover { background: @surfaceHover; border-color: @borderDefault; }
+/* The collapsed bar's name fills the row like the close button next to it (28 px, fully rounded). */
 QPushButton#MiniTitle {
-    background: transparent; border: none; color: @accent; font-weight: bold; font-size: 10pt;
-    padding: 3px 10px; text-align: left;
+    background: transparent; border: none; border-radius: 13px; color: @accent; font-weight: bold;
+    font-size: 10pt; padding: 0 12px; min-height: 28px; max-height: 28px; text-align: left;
 }
-QPushButton#MiniTitle:hover { background: @surfaceHover; border-radius: 4px; }
+QPushButton#MiniTitle:hover { background: @surfaceHover; }
+QPushButton#MiniTitle:pressed { background: @borderDefault; }
 
 /* ---------- frame ---------- */
 #Header { border-bottom: 1px solid @borderSoft; background: transparent; }
-#BrandMark {
-    border: 1px solid @borderFocus; border-radius: 12px; background: @accentActive;
-    min-width: 38px; max-width: 38px; min-height: 38px; max-height: 38px;
-}
 #BrandTitle { color: @textStrong; font-size: 16px; font-weight: bold; }
 #BrandSubtitle, #Muted, QLabel[muted="true"] { color: @textMuted; font-size: 11px; }
 #TabBar { border-bottom: 1px solid @borderSoft; background: transparent; }
@@ -46,6 +47,8 @@ QPushButton#MiniTitle:hover { background: @surfaceHover; border-radius: 4px; }
 #StatusLink:hover { color: @accentHover; }
 
 QScrollArea, QScrollArea > QWidget > QWidget#PageCanvas { background: transparent; border: none; }
+/* The thumbnail strip sits on its section: viewport and content stay see-through. */
+QScrollArea#ThumbStrip > QWidget, QWidget#ThumbStripContent { background: transparent; }
 #PageCanvas { background: transparent; }
 
 /* Thin pill scrollbars: 4 px handle, 6 px while hovered/dragged, fully rounded, no arrows. */
@@ -74,16 +77,16 @@ QScrollBar::add-page, QScrollBar::sub-page, QScrollBar::up-arrow, QScrollBar::do
 }
 #TabButton:hover { color: @textStrong; }
 #TabButton:checked { border-bottom-color: @accentHover; color: @textStrong; }
-#TabCount {
+#TabCount { border: 1px solid transparent;
     background: @borderDefault; border-radius: 8px; color: @textPrimary;
-    font-size: 10px; padding: 1px 6px; min-width: 8px;
+    font-size: 10px; padding: 1px 6px; min-width: 8px; min-height: 14px; max-height: 14px;
 }
 #DetailsTab {
     border: none; border-bottom: 2px solid transparent; background: transparent;
     color: @textMuted; padding: 0 3px; min-height: 36px; margin-right: 13px;
 }
 #DetailsTab:hover, #DetailsTab:checked { border-bottom-color: @accent; color: @textStrong; }
-#DetailsTabCount { background: @surfaceTertiary; border-radius: 8px; font-size: 10px; padding: 1px 6px; }
+#DetailsTabCount { border: 1px solid transparent; background: @surfaceTertiary; border-radius: 7px; font-size: 10px; padding: 0 6px; }
 
 /* ---------- buttons ---------- */
 QPushButton[variant] {
@@ -131,7 +134,7 @@ QComboBox QAbstractItemView {
     color: @textPrimary; padding: 4px; outline: none;
     selection-background-color: @borderStrong; selection-color: @textStrong;
 }
-QComboBox QAbstractItemView::item { min-height: 28px; padding: 0 8px; border-radius: 6px; }
+QComboBox QAbstractItemView::item { min-height: 28px; padding: 0 8px; border-radius: 8px; }
 
 #ClearButton { border: none; background: transparent; border-radius: 8px; padding: 4px; }
 #ClearButton:hover { background: @borderStrong; }
@@ -139,7 +142,7 @@ QComboBox QAbstractItemView::item { min-height: 28px; padding: 0 8px; border-rad
 /* ---------- pills and badges ---------- */
 QLabel[badge] {
     border: 1px solid @borderSoft; border-radius: 10px; background: @surfaceGlassHover;
-    color: @textSecondary; font-size: 11px; padding: 2px 8px;
+    color: @textSecondary; font-size: 11px; padding: 2px 8px; min-height: 15px; max-height: 15px;
 }
 QLabel[badge="warning"] { border-color: @warningBorder; color: @warning; }
 QLabel[badge="success"] { border-color: @successBorder; color: @successText; background: @successSurface; }
@@ -151,7 +154,7 @@ QLabel[badge="improved"] { border-color: @borderFocus; color: @accentText; backg
 QLabel[badge="removed"] { border-color: @dangerBorder; color: @dangerText; background: @dangerSurface; }
 QPushButton#PurchasePill {
     border: 1px solid @successBorder; border-radius: 10px; background: @successSurface;
-    color: @successText; font-size: 11px; padding: 2px 7px 2px 6px;
+    color: @successText; font-size: 11px; padding: 2px 8px 2px 6px; min-height: 15px; max-height: 15px;
 }
 QPushButton#PurchasePill:hover { border-color: @success; }
 
@@ -180,7 +183,7 @@ QPushButton#CollectionPill {
 #SidebarPanel { border: 1px solid @borderStrong; border-radius: 16px; background: @surfaceGlass; }
 #SectionTitle { color: @textMuted; font-size: 11px; font-weight: bold; letter-spacing: 0.7px; }
 #SidebarTitle { color: @accentText; font-size: 11px; font-weight: bold; letter-spacing: 0.7px; }
-#StatePanel { border: 1px solid @borderDefault; border-radius: 7px; background: @surfaceGlass; }
+#StatePanel { border: 1px solid @borderDefault; border-radius: 16px; background: @surfaceGlass; }
 #StateTitle { color: @textStrong; font-size: 18px; font-weight: bold; }
 #StateText { color: @textMuted; }
 #Summary { color: @textMuted; }
@@ -190,7 +193,7 @@ QPushButton#CategoryItem {
     color: @textSecondary; text-align: left; padding: 8px 10px; font-size: 12px;
 }
 QPushButton#CategoryItem:hover { background: @surfaceHover; color: @textStrong; }
-QPushButton#CategoryItem:checked { border-color: @borderFocus; background: @accentActive; color: @textStrong; }
+QPushButton#CategoryItem:checked { border-color: @successBorder; background: @successSurface; color: @textStrong; }
 
 /* ---------- details ---------- */
 #DetailsName { color: @textStrong; font-size: 18px; font-weight: bold; }
@@ -200,15 +203,30 @@ QPushButton#CategoryItem:checked { border-color: @borderFocus; background: @acce
 #InfoKey { color: @textMuted; font-size: 11px; }
 #InfoValue { color: @textPrimary; font-size: 11px; font-family: Consolas, "Courier New", monospace; }
 #InfoRow { border-bottom: 1px solid @borderSoft; }
-#PurchaseNotice { border: 1px solid @warningBorder; border-radius: 16px; background: @warningSurface; }
+/* Purchase notice: a calm card, never a warning. Free = soft success tint, paid = soft accent tint. */
+#PurchaseNotice { border: 1px solid @borderSoft; border-radius: 16px; background: @surfaceGlass; }
+#PurchaseNotice[kind="free"] {
+    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 @successSurface, stop: 1 @surfaceGlass);
+}
+#PurchaseNotice[kind="paid"] {
+    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 @accentActive, stop: 1 @surfaceGlass);
+}
+#NoticeBadge { border: 1px solid @successBorder; border-radius: 18px; background: @successSurface; }
+#NoticeBadge[kind="paid"] { border-color: @borderFocus; background: @accentActive; }
+#NoticeTitle { color: @textStrong; font-size: 13px; font-weight: bold; }
+#NoticeText { color: @textSecondary; font-size: 12px; }
 #PurchaseNotice QLabel { color: @textSecondary; }
 QTextBrowser#Description { background: transparent; border: none; color: @textSecondary; }
 #ChangelogVersion { color: @textStrong; font-weight: bold; }
 #ChangelogDate { color: @textMuted; font-size: 11px; }
-#ScreenshotMain { border: 1px solid @borderSoft; border-radius: 12px; background: @backgroundDeep; }
-QPushButton#Thumb { border: 1px solid @borderSoft; border-radius: 8px; background: @surfaceSecondary; padding: 2px; }
+#ScreenshotMain { border: 1px solid @borderSoft; border-radius: 8px; background: @backgroundDeep; }
+QPushButton#Thumb { border: 1px solid @borderSoft; border-radius: 6px; background: @surfaceSecondary; padding: 2px; }
 QPushButton#Thumb:checked { border-color: @accentHover; }
-QPushButton#GalleryNav { border: 1px solid @borderStrong; border-radius: 16px; background: @overlay; padding: 6px; }
+QPushButton#GalleryNav { border: 1px solid @borderStrong; border-radius: 16px; background: @overlay; padding: 0;
+                         min-width: 32px; max-width: 32px; min-height: 32px; max-height: 32px; }
+QPushButton#GalleryNav[large="true"] { border-radius: 20px; min-width: 40px; max-width: 40px; min-height: 40px; max-height: 40px; }
+#GalleryCounter { border: 1px solid @borderStrong; border-radius: 10px; background: @overlay; color: @textStrong;
+                  font-size: 11px; padding: 2px 8px; min-height: 15px; max-height: 15px; }
 QPushButton#GalleryNav:hover { border-color: @accentHover; }
 
 /* ---------- menus ---------- */
@@ -223,9 +241,13 @@ QMenu#ContextMenu::icon { padding-left: 6px; }
 
 /* ---------- overlays ---------- */
 #BusyShade { background: @backgroundOverlay; }
-#BusyMessage { border: 1px solid @textDisabled; border-radius: 5px; background: @surfaceTertiary; color: @textStrong; padding: 15px; }
+/* Package operations: a frosted backdrop (WorkShade paints a blurred snapshot) and a glass card that
+   BusyCard paints itself (nearly opaque theme surfaces, bright top edge). */
+#BusyCard { background: transparent; border: none; }
+#BusyTitle { color: @textStrong; font-size: 14px; font-weight: bold; }
+#BusyHint { color: @textMuted; font-size: 12px; }
 #Toast {
-    border: 1px solid @borderStrong; border-left: 4px solid @borderFocus; border-radius: 6px;
+    border: 1px solid @borderStrong; border-left: 4px solid @borderFocus; border-radius: 12px;
     background: @surfaceTertiary;
 }
 #Toast[kind="success"] { border-left-color: @success; }
@@ -236,13 +258,12 @@ QMenu#ContextMenu::icon { padding-left: 6px; }
 /* ---------- settings ---------- */
 #ModalShade { background: @overlay; }
 #SettingsBody { background: transparent; border: none; }
-#SettingsWindow QWidget { font-family: "Segoe UI", Arial, sans-serif; font-size: 13px; color: @textPrimary; }
 #Modal { border: 1px solid @textDisabled; border-radius: 7px; background: @surfacePrimary; }
 #ModalHeader { border-bottom: 1px solid @borderDefault; }
 #ModalTitle { color: @textStrong; font-size: 18px; font-weight: bold; }
 #SettingsNavigation { border-right: 1px solid @borderDefault; background: @surfaceSecondary; border-bottom-left-radius: 7px; }
 QPushButton#SettingsNavButton {
-    border: none; border-radius: 4px; background: transparent; color: @textSecondary;
+    border: none; border-radius: 10px; background: transparent; color: @textSecondary;
     text-align: left; padding: 0 10px 0 12px; min-height: 34px;
 }
 QPushButton#SettingsNavButton:hover, QPushButton#SettingsNavButton:checked { background: @surfaceActive; color: @textStrong; }
@@ -251,14 +272,27 @@ QPushButton#SettingsNavButton[danger="true"]:checked { background: @dangerSurfac
 #PageTitle { color: @textStrong; font-size: 14px; font-weight: bold; }
 #FieldLabel { color: @textPrimary; }
 #ConfigLabel { color: @textStrong; font-size: 12px; font-weight: bold; }
-#ConfigPanel, #PreviewPanel { border: 1px solid @borderDefault; border-radius: 8px; background: @surfaceSecondary; }
-#PreviewStage { border: 1px solid @borderSoft; border-radius: 6px; background: @backgroundWindow; }
-#Notice { border: 1px solid @borderSoft; border-radius: 6px; background: @surfaceSecondary; }
-#DangerNotice { border: 1px solid @dangerBorder; border-radius: 8px; background: @dangerSurface; }
+#ConfigPanel, #PreviewPanel { border: 1px solid @borderDefault; border-radius: 12px; background: @surfaceSecondary; }
+#PreviewStage { border: 1px solid @borderSoft; border-radius: 8px; background: @backgroundWindow; }
+#Notice { border: 1px solid @borderSoft; border-radius: 12px; background: @surfaceSecondary; }
+#DangerNotice { border: 1px solid @dangerBorder; border-radius: 12px; background: @dangerSurface; }
 QPushButton#Segment {
-    border: 1px solid @borderDefault; border-radius: 6px; background: @surfaceSecondary;
+    border: 1px solid @borderDefault; border-radius: 9px; background: @surfaceSecondary;
     color: @textSecondary; font-size: 11px; font-weight: bold; padding: 5px 10px; min-height: 19px;
 }
 QPushButton#Segment:hover { border-color: @borderStrong; background: @surfaceHover; color: @textStrong; }
 QPushButton#Segment:checked { border-color: @borderFocus; background: @accentActive; color: @textStrong; }
 QPushButton#Segment:disabled { color: @textDisabled; }
+
+/* ---------- onboarding (welcome) window ---------- */
+#WelcomeHeader { background: transparent; border-bottom: 1px solid @borderSoft; }
+#WelcomeFooter { background: transparent; border-top: 1px solid @borderSoft; }
+#WelcomeBrand { color: @textStrong; font-size: 14px; font-weight: bold; }
+#WelcomeHeroTile { border: 1px solid @borderFocus; border-radius: 28px; background: @accentActive; }
+#WelcomeEyebrow { color: @accentText; font-size: 11px; font-weight: bold; letter-spacing: 1.5px; }
+#WelcomeTitle { color: @textStrong; font-size: 24px; font-weight: bold; }
+#WelcomeText { color: @textSecondary; font-size: 14px; }
+#WelcomeInstalled { border: 1px solid @successBorder; border-radius: 11px; min-height: 17px; max-height: 17px; background: @successSurface;
+                    color: @successText; font-size: 11px; font-weight: bold; padding: 3px 10px; }
+#WelcomeHint { color: @textMuted; font-size: 12px; }
+#WelcomeError { color: @danger; border: 1px solid @danger; border-radius: 12px; padding: 12px; }

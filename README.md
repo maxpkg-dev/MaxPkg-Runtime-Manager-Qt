@@ -1,4 +1,4 @@
-# MaxPkg Runtime Manager (Qt)
+# MaxPkg Package Manager
 
 Package manager for Autodesk 3ds Max, rebuilt on **Python + Qt**: find scripts in the
 [maxpkg.dev](https://maxpkg.dev) catalog, install, run, update and remove them, and keep your favourite
@@ -6,9 +6,9 @@ tools on the MaxPkg toolbar. Same Manager you know — without the embedded web 
 
 ![Discover](docs/screenshots/qt-discover-1300.png)
 
-## Why a new Runtime
+## Why it was rebuilt
 
-The MaxScript Runtime renders its UI in a dotNet `WebBrowser` and runs parts of its update logic in
+The previous MaxScript version renders its UI in a dotNet `WebBrowser` and runs parts of its update logic in
 background threads, which can end in *"MAXScript Garbage Collection Error"* and freezes while the
 catalog loads. This version uses the Qt and Python that ship with 3ds Max:
 
@@ -21,10 +21,10 @@ catalog loads. This version uses the Qt and Python that ship with 3ds Max:
 In 3ds Max: *Scripting → Run Script…* → `StartMaxPkg.ms`, or in the Listener:
 
 ```maxscript
-fileIn @"C:\Projects\Scripts\MaxPkg-Runtime-Manager-Qt\StartMaxPkg.ms"
+fileIn @"<repository folder>\StartMaxPkg.ms"
 ```
 
-Running it again restarts the Runtime cleanly. The preview runs beside the MaxScript Runtime and imports
+Running it again restarts the Package Manager cleanly. The preview runs beside the previous MaxScript version and imports
 its settings on first start (`settings.ini`, same format).
 
 ## The Manager
@@ -70,10 +70,10 @@ on a real profile yet.
 | `assets/` | Lucide icons, themes, `manager.qss` |
 | `tests/` | unit tests and in-Max scripts |
 | `docs/` | architecture, UI, original spec, screenshots |
-| `.agents/`, `CLAUDE.md`, `PITFALLS.md` | rules for contributors and agents |
+| `.agents/`, `.claude/CLAUDE.md` | rules for contributors and agents, pitfalls (`.agents/pitfalls.md`) |
 
 ## License
 
-MaxPkg Runtime is provided only for use with the official MaxPkg service. Unauthorized copying,
+MaxPkg Package Manager is provided only for use with the official MaxPkg service. Unauthorized copying,
 modification, redistribution, reverse engineering, or use with third-party installer endpoints is
 prohibited. Copyright (c) 2026 Lukianenko Vasyl. Developed by [3DGROUND](https://3dground.net).

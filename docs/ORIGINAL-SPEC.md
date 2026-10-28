@@ -1,321 +1,266 @@
-# Оригинал MaxPkg Runtime Manager 1.2.0 — спецификация для Qt-версии
+# Original MaxPkg Runtime Manager 1.2.0 — specification for the Qt version
 
-Источник: `C:\Projects\Scripts\runtime` (MaxScript + HTML в dotNet WebBrowser), установленная копия в
-3ds Max 2027. Скриншоты сняты с живого Manager в `docs/original/`.
+Source: the MaxScript + HTML (dotNet WebBrowser) Runtime, repository `maxpkg-dev/MaxPkg-Runtime-Manager`,
+inspected in code and in a running 3ds Max 2027. Screenshots of the live Manager are in `docs/original/`.
 
-**Главное правило переноса: UI/UX повторяем как в оригинале** — те же экраны, тексты, порядок
-элементов, поведение и адаптивность. Меняем только техническую основу (Qt + Python вместо
-WebBrowser + dotNet). Улучшения допустимы только там, где они не меняют привычный сценарий
-(в первую очередь — тулбар, см. раздел 9).
+**Rule for the port: repeat the UI/UX of the original** — the same screens, texts, element order, behaviour
+and responsiveness. Only the technology changes (Qt + Python instead of WebBrowser + dotNet). Improvements
+are allowed where they do not change the familiar workflow; every one is listed in `docs/UI.md`.
 
 ---
 
-## 1. Назначение
+## 1. Purpose
 
-Менеджер пакетов (скриптов) для 3ds Max, работающий с каталогом maxpkg.dev:
-поиск, установка, запуск, обновление и удаление скриптов, собственный тулбар с кнопками
-установленных скриптов, самообновление Runtime. Лицензия: только для официального сервиса MaxPkg.
+Package (script) manager for 3ds Max working with the maxpkg.dev catalog: search, install, run, update and
+remove scripts, a toolbar with buttons of installed scripts, and Runtime self-update. License: for use with
+the official MaxPkg service only.
 
-## 2. Установка и раскладка файлов
+## 2. Installation and file layout
 
-**Источник установки:** `MaxPkg-Runtime-Manager.mzp` (`mzp.run` → `run/drop install.ms`), либо
-автоматически при установке скрипта с сайта (блок перетаскивается во вьюпорт).
+**Installer:** `MaxPkg-Runtime-Manager.mzp` (`mzp.run` → `run/drop install.ms`), or automatically when a script
+is installed from the website (a block dragged into a viewport).
 
-`install.ms` делает:
-1. Останавливает текущий `MaxPkg` (`MaxPkg.shutdown()`).
-2. Копирует `core/`, `ui/`, `themes/`, `startup.ms`, `version.ini`, `uninstall.ms` в
-   **`(getDir #temp)\MaxPkg-Runtime-Manager\`** (например,
-   `%LOCALAPPDATA%\Autodesk\3dsMax\2027 - 64bit\ENU\temp\MaxPkg-Runtime-Manager\`).
-   Папки `core/` и `ui/` перед этим удаляются целиком; пользовательские темы, `settings.ini`, `data/` сохраняются.
-3. Создаёт `data\packages\` и `logs\`.
-4. Пишет startup-шим `(getDir #userStartupScripts)\maxpkg-runtime-startup.ms` = `fileIn @"<root>/startup.ms"`.
-5. Пишет MacroScript `(getDir #userMacros)\maxpkg-runtime-manager.mcr`:
-   `macroScript MaxPkg_Manager category:"MaxPkg" buttonText:"MaxPkg Manager"`, иконка `ui/common/icons/maxpkg-logo.svg`;
-   при выполнении поднимает Runtime при необходимости и зовёт `MaxPkg.openManager()`.
-6. Запускает `startup.ms` и показывает **онбординг**.
-7. При ошибке — тематический «Result dialog» (`ui/common/result-dialog.*`) с заголовком
-   «Installation incomplete» и тремя шагами помощи.
+`install.ms`:
+1. Stops the running `MaxPkg` (`MaxPkg.shutdown()`).
+2. Copies `core/`, `ui/`, `themes/`, `startup.ms`, `version.ini`, `uninstall.ms` to
+   **`(getDir #temp)\MaxPkg-Runtime-Manager\`**. `core/` and `ui/` are deleted first; user themes,
+   `settings.ini` and `data/` are kept.
+3. Creates `data\packages\` and `logs\`.
+4. Writes the startup shim `(getDir #userStartupScripts)\maxpkg-runtime-startup.ms` = `fileIn @"<root>/startup.ms"`.
+5. Writes the MacroScript `(getDir #userMacros)\maxpkg-runtime-manager.mcr`
+   (`macroScript MaxPkg_Manager category:"MaxPkg" buttonText:"MaxPkg Manager"`, icon `ui/common/icons/maxpkg-logo.svg`);
+   it starts the Runtime when needed and calls `MaxPkg.openManager()`.
+6. Runs `startup.ms` and shows the **onboarding** window.
+7. On failure shows the themed result dialog (`ui/common/result-dialog.*`), "Installation incomplete" with
+   three help steps.
 
-Удаление Runtime: `Settings > Uninstall` → `uninstall.ms` (убирает шим, макрос, тулбар, папку Runtime,
-показывает Result dialog).
+Removing the Runtime: `Settings > Uninstall` → `uninstall.ms` (removes the shim, macro, toolbar and Runtime
+folder, shows the result dialog).
 
-### Пакеты
-- Пакет = папка с `manifest.ini` (единственный источник правды). Корни поиска:
-  `getDir #temp`, `<runtime>\data\packages`, плюс `[Packages] Roots` из настроек. Ищется `manifest.ini`
-  в самом корне и в каждой подпапке первого уровня.
-- Установка пакета: скачать `.mzp` во временный файл `maxpkg-download-<guid>.mzp` и **`fileIn` его**
-  (установщик пакета генерирует MaxPkg Packager), затем пересканировать и проверить, что GUID появился.
-  Имя файла `slug@version@guid.mzp` → ожидаемый GUID.
-- Пакеты сами создают: макросы `maxpkg-<guid>*.mcr` / `MaxPkg-MaxPkg_<guidбезДефисов>.mcr`,
-  иконку `(getDir #userIcons)\<guid>.svg`, quad-menu (`maxpkg-quad.ms` +
-  `userStartupScripts\maxpkg-<guid>-quad-startup.ms`), uninstall-хук (`uninstallScript`, по умолчанию `uninstall.ms`).
-- Удаление: проверка безопасности пути (не корни temp/userScripts/startup, не внутри Runtime) →
-  хук → quad-menu cleanup → удалить макросы и иконку → удалить папку → пересканировать.
-- Запуск: `Runtime=Python` или `.py` → `python.ExecuteFile`, иначе `fileIn` (`.ms`/`.mse`).
+### Packages
+- A package is a folder with `manifest.ini` (the only source of truth). Roots: `getDir #temp`,
+  `<runtime>\data\packages`, plus `[Packages] Roots` from the settings. `manifest.ini` is looked up in the root
+  and in every first-level subfolder.
+- Install: download the `.mzp` to `maxpkg-download-<id>.mzp` and **`fileIn` it** (the installer is generated by
+  MaxPkg Packager), rescan and verify the GUID appeared. A file name `slug@version@guid.mzp` gives the GUID.
+- Packages create: macros `maxpkg-<guid>*.mcr` / `MaxPkg-MaxPkg_<guid without dashes>.mcr`, the icon
+  `(getDir #userIcons)\<guid>.svg`, quad menu entries (`maxpkg-quad.ms` +
+  `userStartupScripts\maxpkg-<guid>-quad-startup.ms`) and an uninstall hook (`uninstallScript`, default `uninstall.ms`).
+- Uninstall: path safety check (not temp/userScripts/startup roots, not inside the Runtime) → hook →
+  quad menu cleanup → remove macros and icon → remove the folder → rescan.
+- Run: `Runtime=Python` or `.py` → `python.ExecuteFile`, otherwise `fileIn` (`.ms`/`.mse`).
 
-Ключи `manifest.ini` секции `[package]` (с алиасами): `packageGuid|Guid`, `name`, `slug`, `buttonName`,
-`version`, `developerName|Developer`, `description`, `documentation|help`, `homepage`, `support`,
-`purchase`, `purchaseButtonLabel` (по умолчанию «Buy»), `license`, `licenseUrl`, `releaseChannel`,
-`releaseDate`, `min3dsMax`, `max3dsMax`, `manifestVersion`, `packager`, `packagerVersion`, `entry`,
-`runtime`, `icon`, `showInToolbar|ToolbarVisible`, `toolbarOrder`, `uninstallScript|Uninstall`.
-`[changelog]`: `N_text`, `N_type`. Обязательные: Guid, Name, Version, Runtime (выводится из Entry), Entry.
-Дубликаты GUID пропускаются, битый манифест логируется и пропускается.
+`manifest.ini` `[package]` keys (with aliases): `packageGuid|Guid`, `name`, `slug`, `buttonName`, `version`,
+`developerName|Developer`, `description`, `documentation|help`, `homepage`, `support`, `purchase`,
+`purchaseButtonLabel` (default "Buy"), `license`, `licenseUrl`, `releaseChannel`, `releaseDate`, `min3dsMax`,
+`max3dsMax`, `manifestVersion`, `packager`, `packagerVersion`, `entry`, `runtime`, `icon`,
+`showInToolbar|ToolbarVisible`, `toolbarOrder`, `uninstallScript|Uninstall`. `[changelog]`: `N_text`, `N_type`.
+Required: Guid, Name, Version, Runtime (derived from Entry), Entry. Duplicate GUIDs are skipped; a broken
+manifest is logged and skipped.
 
-## 3. Публичный MaxScript API — сохранить обязательно
+## 3. Public MaxScript API — must be preserved
 
-Его используют README, установщики пакетов, блок установки с сайта и пользователи из Listener.
-В Qt-версии нужен **MaxScript-фасад `MaxPkg` с теми же методами**, проксирующий в Python.
+Used by the README, package installers, the website install block and users in the Listener. The Qt
+version needs a **MaxScript `MaxPkg` facade with the same methods** that forwards to Python.
 
 `isStarted()`, `start()`, `shutdown()`, `scan()`, `openManager tab: settingsPage:`, `showOnboarding()`,
-`getPackages()`, `getPackage ref`, `getSettings()`, `saveSettings()`, `getStatus()`,
-`run ref`, `install ref showNotification:`, `uninstall ref showNotification:`, `checkUpdates()`,
-`updateAll()`, `updatePackage ref`, `selfUpdate()`, `rebuildToolbar()`, `resetToolbarPosition()`,
-`setToolbarVisible ref bool`, `resetToolbarOrder()`, `setToolbarOrder guids`, `openPackageFolder ref`,
-`openPackageLink ref kind`, `openPackageHelp ref`, `packageInstalled guid`, `packageRemoved guid`,
-`isBusy()`, `browsePackages/browseCollections/browseCategories/getRemotePackageDetails/resolveRemotePackage`;
-свойства `version`, `runtimeChannel`, `packages`, `settings`.
+`getPackages()`, `getPackage ref`, `getSettings()`, `saveSettings()`, `getStatus()`, `run ref`,
+`install ref showNotification:`, `uninstall ref showNotification:`, `checkUpdates()`, `updateAll()`,
+`updatePackage ref`, `selfUpdate()`, `rebuildToolbar()`, `resetToolbarPosition()`, `setToolbarVisible ref bool`,
+`resetToolbarOrder()`, `setToolbarOrder guids`, `openPackageFolder ref`, `openPackageLink ref kind`,
+`openPackageHelp ref`, `packageInstalled guid`, `packageRemoved guid`, `isBusy()`,
+`browsePackages/browseCollections/browseCategories/getRemotePackageDetails/resolveRemotePackage`;
+properties `version`, `runtimeChannel`, `packages`, `settings`.
 
-`MaxPkg.install "prune scene"` принимает GUID, slug, URL, локальный путь или свободное имя
-(регистр и порядок слов не важны: нормализация → `packages/resolve` → поиск по каталогу).
-`install` возвращает `{success, errorCode, errorMessage, packageGuid}` (коды `RUNTIME_BUSY`,
-`PACKAGE_NOT_FOUND`, `ARTIFACT_NOT_FOUND`, `INSTALL_FAILED`, `INCOMPATIBLE_3DS_MAX`, …) и показывает
-системное уведомление Windows (tray balloon), если `showNotification: true`.
+`MaxPkg.install "prune scene"` accepts a GUID, slug, URL, local path or free name (case and word order do not
+matter: normalization → `packages/resolve` → catalog search). It returns `{success, errorCode, errorMessage,
+packageGuid}` (codes `RUNTIME_BUSY`, `PACKAGE_NOT_FOUND`, `ARTIFACT_NOT_FOUND`, `INSTALL_FAILED`,
+`INCOMPATIBLE_3DS_MAX`, …) and shows a Windows tray notification when `showNotification: true`.
 
-> Не найдено в репозитории: что именно вызывает блок установки с сайта. Перед релизом проверить в
-> `maxpkg-dev/max-dev-tool` / на сайте, какие методы `MaxPkg` он использует.
+> Not found in the repository: which `MaxPkg` methods the website install block calls. Check
+> `maxpkg-dev/max-dev-tool` and the website before replacing the MaxScript Runtime.
 
-## 4. Сетевой API
+## 4. Network API
 
-- База: `https://maxpkg.dev/api/runtime/v1/` (переопределение `[Endpoint] apiEndpoint`, видно только в Developer mode).
-- Все запросы — `POST application/x-www-form-urlencoded`, общие поля `max3dsMax=<год>`, `runtimeVersion`, `channel`.
-- Ответы — **INI-текст** (секции `[error] Code/Message/RequestId`, `[catalog]|[meta] Page/PageSize/Total/TotalPages/TotalPackages`,
-  пакеты — секция на пакет с ключами `Guid, Slug, Name, ButtonName, Version, Developer, Description, FullDescription,
+- Base: `https://maxpkg.dev/api/runtime/v1/` (override `[Endpoint] apiEndpoint`, visible only in Developer mode).
+- Every request is `POST application/x-www-form-urlencoded` with `max3dsMax=<year>`, `runtimeVersion`, `channel`.
+- Responses are **INI text**: `[error] Code/Message/RequestId`, `[catalog]|[meta] Page/PageSize/Total/TotalPages/TotalPackages`,
+  one section per package (`Guid, Slug, Name, ButtonName, Version, Developer, Description, FullDescription,
   Category, Documentation, Homepage, Support, PurchaseUrl, PurchaseButtonLabel, License, LicenseUrl, Channel,
   ReleaseDate, Min3dsMax, Max3dsMax, Runtime, Entry, IconUrl, PackageIconUrl, CoverImageUrl, DownloadUrl,
-  Rating, ReviewCount, DownloadCount`; `<section>.changelog` или `[changelog] Count` + `changelog_N`/`changelog_N_item_M`;
-  `[screenshots] Count` + `screenshot_N Url/ThumbnailUrl/Title/Caption/SortOrder`).
+  Rating, ReviewCount, DownloadCount`); `<section>.changelog` or `[changelog] Count` + `changelog_N`/`changelog_N_item_M`;
+  `[screenshots] Count` + `screenshot_N Url/ThumbnailUrl/Title/Caption/SortOrder`.
 
-| Действие | Поля | Назначение |
+| Action | Fields | Purpose |
 |---|---|---|
 | `catalog` | query, category, sort (popular/newest/rating/downloads/name), page, pageSize=24, featured=true \| collection | Discover |
-| `collections` | — | чипы коллекций (`[meta] FeaturedCount, Count`, `collection_N Slug/Name/Description/Icon/AccentColor/Count`) |
-| `categories` | — | категории (`category_* Slug/Name/Description/Count`, показываются только с Count>0) |
-| `packages/details` | package | детали |
-| `packages/resolve` | package | установка по ссылке |
-| `updates` | packages=`guid@version,…` | одна пакетная проверка обновлений |
+| `collections` | — | collection chips (`[meta] FeaturedCount, Count`, `collection_N Slug/Name/Description/Icon/AccentColor/Count`) |
+| `categories` | — | categories (`category_* Slug/Name/Description/Count`, only Count > 0 shown) |
+| `packages/details` | package | details |
+| `packages/resolve` | package | install by reference |
+| `updates` | packages=`guid@version,…` | one batch update check |
 
-Клиент дополнительно отбрасывает пакеты с `Min3dsMax` выше текущей версии Max.
-HTTP: dotNet WebClient с TLS 1.2 и автоматический фолбэк на `curl.exe` на сессию.
+The client also drops packages whose `Min3dsMax` is newer than the running Max. HTTP: dotNet WebClient with
+TLS 1.2 and a per-session fallback to `curl.exe`.
 
-**Самообновление Runtime:** сравнивает `version.ini` из
-`raw.githubusercontent.com/maxpkg-dev/MaxPkg-Runtime-Manager/main/version.ini` и при новой версии того же
-канала качает `archive/refs/heads/main.zip`, копирует поверх (кроме `settings.ini`, `data/`, `logs/`, `.git/`)
-и перезапускает `startup.ms`. Если открыт онбординг, перезапуск откладывается до его закрытия.
+**Runtime self-update:** compares `version.ini` from
+`raw.githubusercontent.com/maxpkg-dev/MaxPkg-Runtime-Manager/main/version.ini`; for a newer version in the same
+channel downloads `archive/refs/heads/main.zip`, copies it over (except `settings.ini`, `data/`, `logs/`, `.git/`)
+and reruns `startup.ms`. While onboarding is open the reload waits until it is closed.
 
-**Обновления пакетов:** автопроверка при старте по интервалу (1/6/12/24/48/168 ч), кэш результата
-`[Updates] PackageCache=guid@version|…` (бейдж на тулбаре виден без сети), опционально автоустановка.
+**Package updates:** automatic check at startup by interval (1/6/12/24/48/168 h), cached result
+`[Updates] PackageCache=guid@version|…` (the toolbar badge works offline), optional automatic installation.
 
-## 5. Настройки (`<runtime>\settings.ini`, UTF-16)
+## 5. Settings (`<runtime>\settings.ini`, UTF-16)
 
 `[General]` Language=English, Environment, AutoStart, OpenManagerOnStartup, ManagerTheme ·
 `[Toolbar]` Visible, Hidden=`guid|…`, Order=`guid|…`, TitleMode (packageName/buttonName), SubtitleMode
 (version/developer/none), ButtonSize (icon/small/medium/large), IconSize (small/medium/large), Density
 (regular/compact), DockPosition (top/bottom/left/right/floatinghorizontal/floatingvertical), Theme,
-FloatingHorizontalX/Y, FloatingVerticalX/Y (−1 = по центру) ·
-`[Updates]` FrequencyHours, Notifications, AutoCheckPackages, AutoCheckRuntime, DownloadAutomatically,
-LastPackageCheckUtc, PackageCache · `[Manager]` LastTab, LastSelection, Sort, Filter, PositionX/Y, Width,
-Height (900×650 по умолчанию), FirstOpenCompleted, FullCards, SortVersion · `[Developer]` Enabled,
-DebugLogging · `[Packages]` Roots · `[Endpoint]` apiEndpoint.
-Все настройки сохраняются сразу при изменении (без Save/Cancel). Qt-версия должна читать этот файл
-(миграция без потерь).
+FloatingHorizontalX/Y, FloatingVerticalX/Y (−1 = centred) · `[Updates]` FrequencyHours, Notifications,
+AutoCheckPackages, AutoCheckRuntime, DownloadAutomatically, LastPackageCheckUtc, PackageCache · `[Manager]`
+LastTab, LastSelection, Sort, Filter, PositionX/Y, Width, Height (900×650 default), FirstOpenCompleted,
+FullCards, SortVersion · `[Developer]` Enabled, DebugLogging · `[Packages]` Roots · `[Endpoint]` apiEndpoint.
+Every setting is saved immediately (no Save/Cancel). The Qt version reads this file (lossless migration).
 
-## 6. Manager — экраны
+## 6. Manager — screens
 
-Окно 900×650 (min ширина контента 680), позиция и размер запоминаются. Фон — тёмный градиент темы.
+Window 900×650 (minimum content width 680); position and size are remembered. Background: dark theme gradient.
 
-### Общая рамка (все вкладки) — `installed.png`, `discover-1000.jpg`
-- **Шапка 68 px:** слева логотип в скруглённой плашке 40×40 + «maxpkg» / «Runtime 1.2.0».
-  Справа: `Toolbar Configurator` (иконка panel-top), `Check Updates` (refresh-cw, при работе — «Checking updates...»),
-  `Update All` (primary, только когда есть обновления), квадратная кнопка Settings (шестерёнка).
-- **Вкладки 43 px:** `Discover [21]`, `Installed [6]`, `Updates [0]` — счётчик в пилюле, активная вкладка
-  с подчёркиванием цветом accent.
-- **Панель фильтров:** поиск с иконкой (placeholder «Search Discover»), справа выпадающие списки;
-  у активного фильтра/сортировки появляется кнопка «×» сброса.
-- **Статус-бар 28 px:** «6 packages», «0 updates», по центру ссылка `maxpkg.dev ↗`, справа «Runtime 1.2.0»
-  и статус соединения (`Online` зелёным / `Endpoint configured` / Offline / curl — жёлтым).
-- **Оверлеи:** полупрозрачная «busy shade» с текстом операции; тосты уведомлений внутри окна;
-  выпадающие меню собственного вида.
+### Frame (all tabs) — `installed.png`, `discover-1000.jpg`
+- **Header 68 px:** logo in a rounded 40×40 tile + "maxpkg" / "Runtime 1.2.0". Right: `Toolbar Configurator`
+  (panel-top icon), `Check Updates` (refresh-cw; "Checking updates..." while busy), `Update All` (primary, only
+  with updates), square Settings button.
+- **Tabs 43 px:** `Discover [21]`, `Installed [6]`, `Updates [0]` — count in a pill, active tab underlined in accent.
+- **Filter bar:** search with icon (placeholder "Search Discover"), dropdowns on the right; an active
+  filter/sort shows a "×" reset button.
+- **Status bar 28 px:** "6 packages", "0 updates", centred `maxpkg.dev ↗`, right "Runtime 1.2.0" and the
+  connection state (`Online` green / `Endpoint configured` / Offline / curl in yellow).
+- **Overlays:** translucent busy shade with the operation text; in-window toasts; custom dropdown menus.
 
 ### Discover — `discover-1000.jpg`, `discover-1300-sidebar.jpg`
-- Чипы: `All packages`, `Featured N`, коллекции с цветом `AccentColor` и счётчиком.
-- Категории: **≥1200 px — левая панель «CATEGORIES»** (чекбокс-список с количеством);
-  **<1200 px — выпадающий список «All Categories» рядом с поиском**.
-- Сортировка: Popular, Newest, Rating, Downloads, Name.
-- Строка «21 packages [in <фильтр>]», сетка карточек (3 колонки), пагинация по 24 (`Previous`, «Page X of Y», `Next`).
-- **Полная карточка** (высота 248): иконка 40 в плашке, название, «v1.5.3 · 3DGROUND», описание с обрезкой «...»,
-  статистика `↓ 10.7K  ☆ 5.0 (2)`, бейдж покупки справа (`Donate` зелёный / цена), кнопка `Install`
-  или неактивная `✓ Installed`. Клик по шапке карточки → детали.
-- Состояния: «Catalog unavailable» + Retry (иконка cloud-off), «No packages found».
+- Chips: `All packages`, `Featured N`, collections tinted with their `AccentColor` and a count.
+- Categories: **≥ 1200 px — left "CATEGORIES" panel** (checkbox list with counts); **< 1200 px — "All Categories"
+  dropdown beside search**.
+- Sort: Popular, Newest, Rating, Downloads, Name.
+- "21 packages [in <filter>]", card grid (3 columns), pages of 24 (`Previous`, "Page X of Y", `Next`).
+- **Full card** (height 248): 40 px icon tile, name, "v1.5.3 · 3DGROUND", description ending with "...",
+  stats `↓ 10.7K  ☆ 5.0 (2)`, purchase badge on the right (`Donate` / price), `Install` or disabled `✓ Installed`.
+  Clicking the card heading opens Details.
+- States: "Catalog unavailable" + Retry (cloud-off icon), "No packages found".
 
 ### Installed / Updates — `installed.png`
-- Фильтр: All / In toolbar / Hidden. Сортировка: Toolbar order / Name / Developer / Version.
-- **Компактная карточка** (по умолчанию): иконка, название, «v · автор», кнопка `▷ Run`, кнопка `⋯`,
-  в режиме сортировки «Toolbar order» — ручка `⠿` для перетаскивания (меняет порядок на тулбаре).
-  Скрытые с тулбара помечаются индикатором.
-- Полные карточки (Settings → «Show full package cards»): + описание и бейджи (Runtime, Toolbar,
-  «vX available», покупка).
-- Вкладка Updates: зелёная `Update to X.Y.Z` вместо Run.
-- Меню `⋯`: Run · [Update to X] · Details · [Open Folder — dev] · [Help] · Hide from Toolbar / Show in Toolbar ·
-  [Copy GUID, Copy Path — dev] · — · Uninstall (красным).
-- Пусто: «No packages installed» / «No packages match» + Refresh.
+- Filter: All / In toolbar / Hidden. Sort: Toolbar order / Name / Developer / Version.
+- **Compact card** (default): icon, name, "v · author", `▷ Run`, `⋯`; with "Toolbar order" sorting a `⠿` grip
+  reorders the toolbar. Packages hidden from the toolbar are marked.
+- Full cards (Settings → "Show full package cards"): + description and badges (Runtime, Toolbar,
+  "vX available", purchase).
+- Updates tab: green `Update to X.Y.Z` instead of Run.
+- `⋯` menu: Run · [Update to X] · Details · [Open Folder — dev] · [Help] · Hide from Toolbar / Show in Toolbar ·
+  [Copy GUID, Copy Path — dev] · — · Uninstall (red).
+- Empty: "No packages installed" / "No packages match" + Refresh.
 
 ### Details — `details.jpg`
-- Хлебные крошки: `← Back / Installed|Discover / <Name>`.
-- Слева: hero (иконка 48, имя, «Version X by Y», бейджи Runtime · channel · License · Toolbar ·
-  Online info / Offline info), кнопки `Run` + `Uninstall` (или `Install`, или `Update to X`).
-- Блок покупки/доната с текстом и кнопкой (`Donate` / метка из `purchaseButtonLabel`).
-- Вкладки: **Description** (Markdown: заголовки, списки, цитаты, код; ниже секция Links:
-  Copy link, MaxPkg page, Homepage, Documentation, Support, License, Open Folder),
-  **Screenshots N** (большой просмотрщик со стрелками, подпись, лента миниатюр, полноэкранный просмотр),
-  **Changelog N** (группы по версиям с датой; бейджи типов Added/Fixed/Changed/Improved/Removed своим цветом).
-- Справа «PACKAGE INFORMATION»: Package ID (с кнопкой копирования), Version, Release date,
-  3ds Max («2022 and newer» / «Any version»), Author, Type, Channel, License, Integration, Packager — моноширинные значения.
+- Breadcrumb: `← Back / Installed|Discover / <Name>`.
+- Left: hero (48 px icon, name, "Version X by Y", badges Runtime · channel · License · Toolbar ·
+  Online info / Offline info), `Run` + `Uninstall` (or `Install`, or `Update to X`).
+- Purchase/donation notice with text and a button (`Donate` / the `purchaseButtonLabel` text).
+- Tabs: **Description** (Markdown: headings, lists, quotes, code; then a Links section: copy link, MaxPkg page,
+  Homepage, Documentation, Support, License, Open Folder), **Screenshots N** (large viewer with arrows, caption,
+  thumbnail strip, full-window preview), **Changelog N** (grouped by version with dates; colored type badges
+  Added/Fixed/Changed/Improved/Removed).
+- Right: "PACKAGE INFORMATION": Package ID (with copy button), Version, Release date, 3ds Max ("2022 and newer"
+  / "Any version"), Author, Type, Channel, License, Integration, Packager — monospaced values.
 
-### Settings — модальное окно поверх Manager (`settings-*.jpg`)
-Левая навигация: General, Updates, Toolbar, Themes, Developer, [Endpoint — dev], About, Uninstall (красным). Переключатели — зелёные switch.
-- **General:** Language (English); Start Runtime with 3ds Max; Open Manager on startup; Show notifications; Show full package cards in Installed views.
-- **Updates:** Check package updates automatically; Check Runtime updates automatically; Download updates automatically; Check interval (Every hour … Every week).
-- **Toolbar (= Toolbar Configurator):** заголовок + «Show toolbar»; **Live preview** с текстовым резюме
-  «Top · Regular · Large icons · Medium · Version»; сегментированные кнопки:
-  Position (Top, Bottom, Left, Right, Floating Horizontal, Floating Vertical — с мини-глифами),
-  Spacing (Regular/Compact), Icon size (S/M/L), Button style (Icons only/Narrow/Medium/Wide),
-  Second line (None/Version/Developer); примечание для компактных позиций; кнопки
-  Reset package order, Reset toolbar position (только floating), Reset toolbar defaults.
-- **Themes:** Manager theme, Toolbar theme (независимо).
+### Settings — modal over the Manager (`settings-*.jpg`)
+Left navigation: General, Updates, Toolbar, Themes, Developer, [Endpoint — dev], About, Uninstall (red). Green switches.
+- **General:** Language (English); Start Runtime with 3ds Max; Open Manager on startup; Show notifications;
+  Show full package cards in Installed views.
+- **Updates:** Check package updates automatically; Check Runtime updates automatically; Download updates
+  automatically; Check interval (Every hour … Every week).
+- **Toolbar (= Toolbar Configurator):** heading + "Show toolbar"; **Live preview** with a summary
+  "Top · Regular · Large icons · Medium · Version"; segmented buttons: Position (Top, Bottom, Left, Right,
+  Floating Horizontal, Floating Vertical — with small glyphs), Spacing (Regular/Compact), Icon size (S/M/L),
+  Button style (Icons only/Narrow/Medium/Wide), Second line (None/Version/Developer); a note for compact
+  positions; Reset package order, Reset toolbar position (floating only), Reset toolbar defaults.
+- **Themes:** Manager theme, Toolbar theme (independent).
 - **Developer:** Enable developer mode, Enable debug logging.
 - **Endpoint (dev):** Base endpoint.
-- **About:** версия, два абзаца о MaxPkg, `Copy Runtime info`.
-- **Uninstall:** описание, блок «Your scenes are safe.», 3 шага, `Uninstall MaxPkg` → подтверждение «Uninstall MaxPkg now?» Cancel / Yes, uninstall.
+- **About:** version, two paragraphs about MaxPkg, `Copy Runtime info`.
+- **Uninstall:** description, "Your scenes are safe." box, three steps, `Uninstall MaxPkg` → confirmation
+  "Uninstall MaxPkg now?" Cancel / Yes, uninstall.
 
-### Онбординг (отдельное окно, тема Manager)
-«Your next steps» — три карточки: `01 / DISCOVER` Find your next script → Browse scripts;
+### Onboarding (separate window, Manager theme)
+"Your next steps" — three cards: `01 / DISCOVER` Find your next script → Browse scripts;
 `02 / PERSONALIZE` Set up your toolbar → Customize toolbar; `03 / UPDATES` How should scripts update? —
-радио Automatically / Manually (сохраняется сразу). Футер: «This window stays open while you explore.» + Close.
+Automatically / Manually (saved immediately). Footer: "This window stays open while you explore." + Close.
 
-### Result dialog (установка/удаление Runtime)
-Заголовок, резюме, версия, состояние автозапуска, «Quick help» с тремя шагами, статус success/error.
+### Result dialog (Runtime install/uninstall)
+Heading, summary, version, startup state, "Quick help" with three steps, success/error state.
 
-## 7. Адаптивность (повторить те же пороги)
+## 7. Responsiveness (same thresholds)
 
-| Ширина | Поведение |
+| Width | Behaviour |
 |---|---|
-| ≥ 1200 | Discover: боковая панель категорий слева (330 px) |
-| < 1200 | Категории — выпадающий список рядом с поиском |
-| < 900 | Details: одна колонка, Package information под основным блоком |
-| < 760 | Toolbar Configurator: подписи над группами кнопок |
-| < 720 | Кнопки шапки — только иконки (с tooltip) |
-| < 540 | Блок покупки: вертикальная раскладка |
-| 680 | Минимальная ширина контента |
+| ≥ 1200 | Discover: categories panel on the left (330 px) |
+| < 1200 | Categories become a dropdown beside search |
+| < 900 | Details: one column, Package information below |
+| < 760 | Toolbar Configurator: labels above their buttons |
+| < 720 | Header buttons icon-only (with tooltips) |
+| < 540 | Purchase notice stacked vertically |
+| 680 | Minimum content width |
 
-Улучшение без смены UX: в оригинале сетка всегда 3 колонки по 32% (min 230 px). В Qt — та же
-карточка, но число колонок вычисляется по ширине (1–4), чтобы карточки не сжимались и не обрезались.
-Масштаб DPI: оригинал вручную масштабирует WebBrowser; в Qt — логические пиксели и шрифты в pt.
+In the original the grid always has 3 columns of 32% (minimum 230 px); the Qt version computes the column
+count from the width. DPI: the original scales the WebBrowser manually; Qt uses logical pixels.
 
-## 8. Темы
+## 8. Themes
 
-- 6 наборов: Default, 3ds Max Dark, Midnight Blue, Forest Green, Light Studio, Violet Night
-  (`themes/manager/*.ini`, ~65 семантических токенов: background*, surface*, border*, selectionBlue*,
-  text*, accent*, success*, switch*, warning*, danger*, changed*, shadow*, overlay, icon*, brandIcon;
-  `themes/toolbar/*.ini`, 14 токенов). Дополнительные INI-файлы подхватываются автоматически,
-  неполные — с фолбэком на Default.
-- Иконки — Lucide SVG, перекрашиваются под тему (`ui/common/icons/*.svg`).
-- В Qt: те же INI-токены → QSS/палитра, тот же Default по умолчанию (пожелание пользователя
-  «как в оригинале» приоритетнее дефолта Warm Graphite из навыка), выбор применяется ко всем окнам сразу.
+- Six sets: Default, 3ds Max Dark, Midnight Blue, Forest Green, Light Studio, Violet Night
+  (`themes/manager/*.ini`, ~65 semantic tokens: background*, surface*, border*, selectionBlue*, text*, accent*,
+  success*, switch*, warning*, danger*, changed*, shadow*, overlay, icon*, brandIcon; `themes/toolbar/*.ini`,
+  14 tokens). Additional INI files are found automatically; incomplete ones fall back to Default.
+- Icons: Lucide SVG recolored per theme (`ui/common/icons/*.svg`).
+- Qt: the same INI tokens → QSS/palette, Default by default, applied to all windows at once.
 
-## 9. Тулбар
+## 9. Toolbar
 
-### Как сейчас
-- Docked: `rollout` с WebBrowser, зарегистрированный как CUI dialog bar
-  (`cui.RegisterDialogBar` + `cui.DockDialogBar` top/bottom/left/right).
-  Floating: отдельная WinForms-форма без рамки + WebBrowser + панель-ручка для перетаскивания
-  (6 точек), владелец — окно Max, позиция сохраняется и ограничивается рабочей областью монитора.
-- **Любое изменение (видимость, порядок, тема, обновления) полностью уничтожает и создаёт тулбар заново.**
-- Состав: кнопка бренда `maxpkg` (всегда первая, открывает Manager, красный бейдж с числом обновлений),
-  затем кнопки пакетов по сохранённому порядку (иконка + имя/кнопочное имя + вторая строка версия/автор),
-  стрелки `‹ ›` прокрутки при переполнении.
-- Left/Right/Floating — всегда только иконки; размеры: иконка S/M/L = 22/26/30 (compact 18/22/26),
-  текстовые кнопки 30/34/38 высотой, ширины Narrow/Medium/Wide (Wide = 150 px).
-- Alt + перетаскивание переупорядочивает кнопки прямо на тулбаре (с автопрокруткой и «призраком»),
-  порядок сразу отражается в Installed.
+### Original
+- Docked: a `rollout` with a WebBrowser registered as a CUI dialog bar (`cui.RegisterDialogBar` +
+  `cui.DockDialogBar` top/bottom/left/right). Floating: a borderless WinForms form + WebBrowser + a dotted grip,
+  owned by the Max window, position saved and clamped to the monitor work area.
+- **Any change (visibility, order, theme, update count) destroys and recreates the toolbar.**
+- Content: `maxpkg` button (always first, opens the Manager, red update counter), package buttons in the
+  saved order (icon + name/button name + version/developer line), `‹ ›` scroll arrows on overflow.
+- Left/Right/Floating are always icon-only; icon S/M/L = 22/26/30 px (compact 18/22/26), text buttons 30/34/38 px
+  high, widths Narrow/Medium/Wide (Wide = 150 px).
+- Alt + drag reorders buttons on the toolbar (auto-scroll, ghost); the order shows in Installed at once.
+- Weak points: full rebuilds, two different mechanisms (CUI bar / WinForms form), dragging the bar does not
+  update Settings, the WebBrowser steals keyboard focus, manual DPI hacks.
 
-### Что плохо в оригинале
-- Любое изменение (порядок, видимость, тема, счётчик обновлений) уничтожает и создаёт заново окно с WebBrowser:
-  мигание, утечки, риск GC-ошибки.
-- Два разных механизма: docked = CUI dialog bar, floating = отдельная WinForms-форма со своей ручкой.
-- Перетаскивание тулбара мышью не синхронизируется с Settings.
-- WebBrowser перехватывает фокус клавиатуры (постоянные `enableAccelerators = true`).
-- Размеры зашиты вручную, DPI 150–200% подгоняется хаками.
+### Qt version
+See `docs/UI.md` (native `QToolBar`, per-button updates, chevron overflow, context menus, native Max theme).
 
-### Qt-версия — переписываем толково (согласовано с пользователем)
-**1. Одна модель, точечные обновления.** `ToolbarController` держит список элементов
-(guid, иконка, заголовок, вторая строка, флаг обновления, состояние «занят»), вычисляет diff
-(добавить / удалить / переставить / обновить одну кнопку). **Тулбар никогда не пересоздаётся.**
+## 10. Technical problems of the original (reasons for the rewrite)
 
-**2. Нативный `QToolBar` в главном окне Max** (`qtmax.GetQMaxMainWindow()` — `QMainWindow`), уникальный `objectName`:
-- стыковка ко всем 4 краям и отрыв в плавающий режим средствами Qt, как у родных тулбаров Max;
-- ориентация переключается автоматически: вертикально — только иконки, горизонтально — текстовые кнопки;
-- сигналы `topLevelChanged` / `orientationChanged` / смена области сразу пишут положение в настройки,
-  Settings всегда показывает фактическое положение;
-- шесть позиций настроек (top, bottom, left, right, floatinghorizontal, floatingvertical) сохраняются
-  и реализованы одним механизмом; плавающая геометрия хранится отдельно для каждой ориентации
-  (ключи `FloatingHorizontalX/Y`, `FloatingVerticalX/Y`), с ограничением по рабочей области монитора;
-- восстановление положения — после того как Max восстановил свою раскладку окна.
+1. **MaxScript runs in a background thread.** `updater.ms` and `self-updater.ms` use
+   `CSharpUtilities.SynchronizingBackgroundWorker` whose `DoWork` handler is MaxScript (HTTP, INI parsing,
+   logging, file copying during self-update). MaxScript is not thread-safe → **most likely cause of
+   "MAXScript Garbage Collection Error"**.
+2. Synchronous HTTP on the main thread: opening package details froze Max for ~22 s.
+3. The WebBrowser toolbar is recreated on every change.
+4. All API responses go through one `data/api-response.ini` read with `getINISetting` — races between requests.
+5. Self-update takes the `main` branch, not a published release.
+6. WebBrowser = Internet Explorer engine (IE9 mode): layout limits and unstable rendering.
 
-**3. Кнопка `ToolbarButton`** (наследник `QToolButton`), вид как в оригинале:
-- иконка S/M/L, имя пакета или buttonName, вторая строка Version/Developer/None,
-  стили Icons only / Narrow / Medium / Wide, плотность Regular/Compact (размеры — раздел «Как сейчас»);
-- SVG рендерится под текущий devicePixelRatio, чётко на 150–200% и при переносе между мониторами;
-- кнопка `maxpkg` всегда первая, бейдж числа обновлений; во время проверки обновлений — индикатор;
-- на кнопке пакета — точка «есть обновление»; при установке/обновлении — индикатор занятости и блокировка;
-- `setFocusPolicy(Qt.NoFocus)` — тулбар не перехватывает горячие клавиши Max;
-- tooltip: имя, версия, автор, «Hold Alt and drag to reorder».
+## 11. Component mapping
 
-**4. Поведение (дополнения, привычное не ломаем):**
-- правый клик по пакету: Run, Details, Update to X, Hide from Toolbar, Move Left, Move Right, Toolbar settings…;
-- правый клик по `maxpkg`: Open Manager, Check Updates, Toolbar settings…, Hide toolbar;
-- Alt + перетаскивание сохраняется, плюс линия-индикатор места вставки и автопрокрутка; порядок сразу отражается в Installed;
-- переполнение: встроенный шеврон `»` QToolBar с меню скрытых кнопок (как у родных тулбаров Max) вместо стрелок `‹ ›`
-  (пользователь не возражал против рекомендации; при желании можно вернуть стрелки);
-- новая тема тулбара «3ds Max (native)» — цвета из палитры Max (`QApplication.palette()`),
-  выглядит родным в светлой и тёмной теме Max; остальные 6 тем остаются;
-- живой предпросмотр в Settings → Toolbar рисуется теми же `ToolbarButton`, поэтому всегда совпадает с реальным тулбаром.
-
-**5. Надёжность.** Тулбар принадлежит владельцу сессии (lifecycle из навыка): при перезапуске Runtime
-снимается с главного окна (`removeToolBar` + `deleteLater`), повторный запуск не плодит дубликаты.
-Если главное окно не `QMainWindow`, фолбэк — плавающее окно `Qt.Tool` с той же ручкой из точек.
-
-## 10. Технические проблемы оригинала (причины перехода)
-
-1. **MaxScript выполняется в фоновом потоке.** `updater.ms` и `self-updater.ms` используют
-   `CSharpUtilities.SynchronizingBackgroundWorker`, и обработчик `DoWork` — это MaxScript-функция
-   (HTTP, разбор INI, логирование, а при самообновлении — копирование файлов). `DoWork` идёт вне главного
-   потока; MaxScript не потокобезопасен → **наиболее вероятная причина «MAXScript Garbage Collection Error»**.
-   Qt-версия: в воркерах только чистый Python без `pymxs`, результат — сигналом в главный поток.
-2. Синхронные HTTP-запросы в главном потоке: открытие деталей пакета подвешивает Max (замер: ~22 с).
-3. Полное пересоздание WebBrowser-тулбара на каждое изменение.
-4. Все ответы API пишутся в один файл `data/api-response.ini` и читаются `getINISetting` — гонки при параллельных запросах.
-5. Самообновление берёт ветку `main`, а не опубликованный релиз.
-6. WebBrowser = движок IE (режим IE9) — ограничения вёрстки и нестабильная отрисовка.
-
-## 11. Соответствие компонентов
-
-| Оригинал | Qt/Python |
+| Original | Qt/Python |
 |---|---|
-| `startup.ms`, макрос, шим | тонкий `.ms`-лаунчер → `python.ExecuteFile bootstrap.py`; MaxScript-фасад `MaxPkg` |
-| `core/scanner, settings, ini, utils` | `domain/` — чистый Python (configparser с UTF-16) |
-| `http, repository, updater, image-cache` | `workers.py` + `urllib`/`QNetworkAccessManager`, без `pymxs` в потоках |
-| `launcher, installer, uninstaller, self-updater` | `max_api.py` (главный поток) + операции через один lock |
-| `ui/manager/*` | `ui/manager/` — QWidget-экраны, общая библиотека контролов |
-| `ui/toolbar/*`, `core/toolbar.ms` | `ui/toolbar/` — `QToolBar` + floating-окно |
-| `themes/*.ini` | те же INI → QSS |
-| `notifier.ms` (tray balloon) | `QSystemTrayIcon.showMessage` или тост в окне Max |
+| `startup.ms`, macro, shim | thin `.ms` launcher → `python.ExecuteFile`; MaxScript `MaxPkg` facade (planned) |
+| `core/scanner, settings, ini, utils` | `domain/` — pure Python |
+| `http, repository, updater, image-cache` | `services/network.py`, `services/images.py` — no pymxs in workers |
+| `launcher, installer, uninstaller, self-updater` | `services/max_api.py` (main thread) + operations through one lock |
+| `ui/manager/*` | `ui/` — QWidget screens and shared controls |
+| `ui/toolbar/*`, `core/toolbar.ms` | `ui/toolbar.py` — `QToolBar` + floating host |
+| `themes/*.ini` | the same INI files → QSS |
+| `notifier.ms` (tray balloon) | `QSystemTrayIcon.showMessage` when the Manager is closed |

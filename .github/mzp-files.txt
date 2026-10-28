@@ -1,0 +1,11 @@
+# Files and directories included in MaxPkg-Runtime-Manager-Qt.mzp.
+# Keep this list explicit: everything not listed here is excluded.
+# __pycache__ folders and *.pyc files are always skipped by build_mzp.py.
+
+mzp.run
+install.ms
+uninstall.ms
+StartMaxPkg.ms
+version.ini
+python/
+assets/

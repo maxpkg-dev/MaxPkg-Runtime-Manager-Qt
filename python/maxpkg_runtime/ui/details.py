@@ -5,20 +5,27 @@ from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal
 from ..services.images import rounded
 from .cards import PackageIcon
 from .pages import ScrollPage
-from .widgets import Badge, Button, FlowRow, IconButton, IconLabel, hbox, label, vbox
+from .widgets import (Badge, Button, DragScroll, FlowRow, IconButton, IconLabel, Shimmer, SlideView, hbox, label,
+                      vbox)
 
 SINGLE_COLUMN = 900
 
+# (title, text, free) for the purchase notice. Free packages: free for everyone, and support keeps it going.
 PURCHASE_COPY = {
-    "donate": "This package is free. If it helps your work, consider donating to support the author and continued development.",
-    "support": "This package is free. Support the author to help fund maintenance, improvements, and future releases.",
-    "sponsor": "This package is free. Sponsor the author to help turn new ideas into updates and new tools.",
-    "purchase": "Purchase this package directly from the author to unlock the tool and support its continued development.",
-    "buy": "Buy this package directly from the author and support its continued development.",
+    "donate": ("Free for everyone", "Every feature is free. Your donation keeps the author working on it: without "
+                                    "support from users like you, new updates and tools can't happen.", True),
+    "support": ("Free for everyone", "Every feature is free. Your support keeps the author working on it: without "
+                                     "help from users like you, new updates and tools can't happen.", True),
+    "sponsor": ("Free for everyone", "Every feature is free. Sponsoring keeps the author working on it: without "
+                                     "help from users like you, new updates and tools can't happen.", True),
+    "purchase": ("Sold by the author", "The button opens the author's page, where you can see the price and details "
+                                       "before you decide.", False),
+    "buy": ("Sold by the author", "The button opens the author's page, where you can see the price and details "
+                                  "before you decide.", False),
 }
-LICENSE_COPY = "Get your license directly from the author and receive access according to the developer's terms."
-DEFAULT_PURCHASE_COPY = ("Support this package directly through the author. Your contribution helps fund maintenance "
-                         "and future updates.")
+LICENSE_COPY = ("License from the author", "The button opens the author's page with the license options and terms.",
+                False)
+DEFAULT_PURCHASE_COPY = ("Support the author", "Your support keeps new updates and tools coming.", True)
 CHANGE_TYPES = ("added", "fixed", "improved", "changed", "removed")
 
 
@@ -54,86 +61,129 @@ class AutoHeightBrowser(QtWidgets.QTextBrowser):
         self._fit()
 
 
+
 class ScreenshotViewer(QtWidgets.QWidget):
-    """Large image with previous/next arrows, caption and a thumbnail strip; click opens the preview."""
+    """Screenshot gallery: main image with round previous/next buttons and a 'n / N' counter, title and caption,
+    and a thumbnail strip. A click on the image opens the full-window lightbox.
+
+    compact=True is the side gallery of wide Details windows (above Package information): smaller image, one
+    horizontally scrollable row of thumbnails, caption under the title.
+    """
 
     preview_requested = Signal(int)
 
-    def __init__(self, shots, images, themes, parent=None):
+    def __init__(self, shots, images, themes, compact=False, parent=None):
         QtWidgets.QWidget.__init__(self, parent)
         self.shots = shots
         self.images = images
+        self.compact = compact
         self.index = 0
-        self.main = QtWidgets.QLabel()
+        self.main = SlideView(len(shots), lambda position: images.get(shots[position].url), themes, radius=7)
         self.main.setObjectName("ScreenshotMain")
-        self.main.setAlignment(Qt.AlignCenter)
-        self.main.setMinimumHeight(260)
+        self.main.setMinimumHeight(150 if compact else 260)
         self.main.setCursor(Qt.PointingHandCursor)
-        self.main.mouseReleaseEvent = lambda _event: self.preview_requested.emit(self.index)
+        self.main.setToolTip("Click to open, drag sideways for the next screenshot")
+        self.main.clicked.connect(lambda: self.preview_requested.emit(self.index))
+        self.main.index_changed.connect(self._show_index)
         self.left = QtWidgets.QPushButton(self.main)
         self.right = QtWidgets.QPushButton(self.main)
         for button, icon_name, step in ((self.left, "gallery-chevron-left", -1), (self.right, "gallery-chevron-right", 1)):
             button.setObjectName("GalleryNav")
             button.setCursor(Qt.PointingHandCursor)
-            themes.bind_icon(button, icon_name, "textStrong", 18)
-            button.clicked.connect(lambda _checked=False, delta=step: self.select(self.index + delta))
-        self.title = label("", "ChangelogVersion")
+            button.setFixedSize(32, 32)
+            themes.bind_icon(button, icon_name, "textStrong", 16)
+            button.clicked.connect(lambda _checked=False, delta=step: self.main.slide(delta))
+            button.setVisible(len(shots) > 1)
+        self.counter = label("", "GalleryCounter", parent=self.main)
+        self.counter.setVisible(len(shots) > 1)
+        self.title = label("", "ChangelogVersion", wrap=True)
         self.caption = label("", "Muted", wrap=True)
-        self.thumbs = FlowRow(spacing=8)
         self._thumb_buttons = []
+        thumb_size = QtCore.QSize(88, 54) if compact else QtCore.QSize(120, 72)
+        self._thumb_icon = QtCore.QSize(thumb_size.width() - 6, thumb_size.height() - 6)
+        if compact:
+            strip = QtWidgets.QWidget()
+            strip.setObjectName("ThumbStripContent")
+            strip_layout = hbox(spacing=8)
+            strip.setLayout(strip_layout)
+            self.thumbs = QtWidgets.QScrollArea()
+            self.thumbs.setObjectName("ThumbStrip")
+            self.thumbs.setWidget(strip)
+            self.thumbs.setWidgetResizable(True)
+            self.thumbs.setFrameShape(QtWidgets.QFrame.NoFrame)
+            self.thumbs.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.thumbs.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self.thumbs.setFixedHeight(thumb_size.height() + 14)
+            self._drag = DragScroll(self.thumbs)  # the strip scrolls by dragging, thumbnails included
+            self._drag.watch(strip)
+        else:
+            self.thumbs = FlowRow(spacing=8)
+            self._drag = None
         for position, shot in enumerate(shots):
             button = QtWidgets.QPushButton()
             button.setObjectName("Thumb")
             button.setCheckable(True)
-            button.setFixedSize(120, 72)
-            button.setIconSize(QtCore.QSize(114, 66))
+            button.setCursor(Qt.PointingHandCursor)
+            button.setFixedSize(thumb_size)
+            button.setIconSize(self._thumb_icon)
             button.setToolTip(shot.title)
             button.clicked.connect(lambda _checked=False, value=position: self.select(value))
             self._thumb_buttons.append(button)
-            self.thumbs.add(button)
-        self.setLayout(vbox(self.main, self.title, self.caption, self.thumbs, spacing=8))
+            if compact:
+                self._drag.watch(button)
+                strip_layout.addWidget(button)
+            else:
+                self.thumbs.add(button)
+        if compact:
+            strip_layout.addStretch(1)
+        self.setLayout(vbox(self.main, self.title, self.caption, self.thumbs, spacing=6 if compact else 8))
         images.ready.connect(self._on_ready)
         self.select(0)
 
     def select(self, index):
-        if not self.shots:
-            return
-        self.index = index % len(self.shots)
+        """Jump straight to a screenshot (thumbnails); arrows and drags slide through SlideView instead."""
+        if self.shots:
+            self.main.set_index(index)
+
+    def _show_index(self, index):
+        self.index = index
         shot = self.shots[self.index]
         self.title.setText(shot.title)
         self.caption.setText(shot.caption)
         self.caption.setVisible(bool(shot.caption))
+        self.counter.setText("{} / {}".format(self.index + 1, len(self.shots)))
+        self.counter.adjustSize()
         for position, button in enumerate(self._thumb_buttons):
             button.setChecked(position == self.index)
+        if self.compact and self._thumb_buttons:
+            self.thumbs.ensureWidgetVisible(self._thumb_buttons[self.index], 24, 0)
         self._paint()
 
     def _paint(self):
-        shot = self.shots[self.index]
-        pixmap = self.images.get(shot.url)
-        if pixmap is not None:
-            dpr = self.devicePixelRatioF()
-            target = QtCore.QSize(int((self.main.width() - 4) * dpr), int(self.main.height() * dpr))
-            scaled = pixmap.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            scaled.setDevicePixelRatio(dpr)
-            self.main.setPixmap(scaled)
-        else:
-            self.main.setText("Loading screenshot...")
+        self.main.refresh()
+        dpr = self.devicePixelRatioF()
+        icon = self._thumb_icon
         for position, button in enumerate(self._thumb_buttons):
             thumb = self.images.get(self.shots[position].thumbnail_url)
             if thumb is not None:
-                button.setIcon(QtGui.QIcon(rounded(thumb, 114, 6, self.devicePixelRatioF()).scaled(
-                    int(114 * self.devicePixelRatioF()), int(66 * self.devicePixelRatioF()),
-                    Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)))
+                button.setIcon(QtGui.QIcon(rounded(thumb, icon.width(), 4, dpr).scaled(
+                    int(icon.width() * dpr), int(icon.height() * dpr), Qt.KeepAspectRatioByExpanding,
+                    Qt.SmoothTransformation)))
 
     def _on_ready(self, _source):
         self._paint()
 
     def resizeEvent(self, event):
         QtWidgets.QWidget.resizeEvent(self, event)
-        height = max(260, min(460, int(self.width() * 0.56)))
+        if self.compact:
+            height = max(150, int(self.width() * 0.62))
+        else:
+            height = max(260, min(460, int(self.width() * 0.56)))
         self.main.setFixedHeight(height)
         self.left.move(10, height // 2 - 16)
-        self.right.move(self.main.width() - 46, height // 2 - 16)
+        self.right.move(self.width() - 42, height // 2 - 16)
+        self.counter.adjustSize()  # the first select() runs before the stylesheet padding is known
+        self.counter.move(self.width() - self.counter.width() - 10, height - self.counter.height() - 10)
         self._paint()
 
 
@@ -208,9 +258,19 @@ class DetailsPage(ScrollPage):
         if self.single_column:
             layout = vbox(main, sidebar, spacing=12)
         else:
+            # Wide window: the gallery lives above Package information instead of in a tab.
+            column = QtWidgets.QWidget()
+            column_layout = vbox(spacing=12)
+            if package.screenshots:
+                column_layout.addWidget(self._side_gallery(package))
+            column_layout.addWidget(sidebar)
+            links = self._links(package)
+            if links is not None:
+                column_layout.addWidget(links)
+            column.setLayout(column_layout)
             layout = hbox(spacing=16)
             layout.addWidget(main, 62)
-            layout.addWidget(sidebar, 38, Qt.AlignTop)
+            layout.addWidget(column, 38, Qt.AlignTop)
         self._content.setLayout(layout)
         self.canvas_layout.insertWidget(0, self._content)
 
@@ -269,25 +329,32 @@ class DetailsPage(ScrollPage):
         themes = self.manager_window.themes
         action_label = package.purchase_label()
         lowered = action_label.lower()
-        copy = PURCHASE_COPY.get(lowered) or (LICENSE_COPY if "license" in lowered else DEFAULT_PURCHASE_COPY)
-        heart = lowered in ("donate", "support", "sponsor")
+        title, copy, free = PURCHASE_COPY.get(lowered) or (LICENSE_COPY if "license" in lowered else DEFAULT_PURCHASE_COPY)
         frame = QtWidgets.QFrame()
         frame.setObjectName("PurchaseNotice")
+        frame.setProperty("kind", "free" if free else "paid")
         badge = QtWidgets.QLabel()
-        badge.setFixedSize(32, 32)
+        badge.setObjectName("NoticeBadge")
+        badge.setProperty("kind", frame.property("kind"))
+        badge.setFixedSize(36, 36)
         badge.setAlignment(Qt.AlignCenter)
-        badge.setStyleSheet("border: 1px solid " + _rgba(themes.color("warningBorder")) + "; border-radius: 8px;")
-        themes.bind_icon(badge, "heart" if heart else "circle-dollar-sign", "iconWarning", 16)
-        text = label(copy, "", wrap=True)
-        button = Button(action_label, "heart-success" if heart else "shopping-cart", "installed", themes)
+        themes.bind_icon(badge, "heart" if free else "shopping-cart", "iconSuccess" if free else "iconAccent", 18)
+        text = vbox(label(title, "NoticeTitle"), label(copy, "NoticeText", wrap=True), spacing=2)
+        button = Button(action_label, "heart-success" if free else "external-link", "installed" if free else "primary",
+                        themes)
+        button.setToolTip("Opens the author's page in your browser")
         button.clicked.connect(lambda: self.runtime.open_link(package, "purchase"))
-        frame.setLayout(hbox(badge, text, button, spacing=12, margins=(12, 10, 12, 10)))
-        frame.layout().setStretch(1, 1)
+        button.shimmer = Shimmer(button, radius=10)  # only this big button in Details shimmers, never the card pills
+        row = hbox(spacing=14, margins=(14, 12, 14, 12))
+        row.addWidget(badge, 0, Qt.AlignVCenter)
+        row.addLayout(text, 1)
+        row.addWidget(button, 0, Qt.AlignVCenter)
+        frame.setLayout(row)
         return frame
 
     def _tabs(self, package):
         row = hbox(spacing=0)
-        shots = len(package.screenshots)
+        shots = len(package.screenshots) if self.single_column else 0
         if self.tab == "screenshots" and not shots:
             self.tab = "description"
         tabs = [("description", "Description", None)]
@@ -329,17 +396,25 @@ class DetailsPage(ScrollPage):
         browser = AutoHeightBrowser()
         html = markdown.to_html(package.full_description) if package.full_description else ""
         if not html:
-            html = "<p>" + (package.description or "No description provided.") + "</p>"
+            html = "<p>" + markdown.inline(package.description or "No description provided.") + "</p>"
         theme = self.manager_window.themes.manager
+        colors = {name: theme.color(name).name() for name in (
+            "textSecondary", "textStrong", "textPrimary", "textMuted", "accentHover", "borderStrong",
+            "surfaceTertiary", "surfaceSecondary")}
         browser.document().setDefaultStyleSheet(
-            "p, li {{ line-height: 150%; color: {}; }} h3, h4, h5, h6 {{ color: {}; }} a {{ color: {}; }}"
-            " code, pre {{ font-family: Consolas; color: {}; }}".format(
-                theme.color("textSecondary").name(), theme.color("textStrong").name(),
-                theme.color("accentHover").name(), theme.color("textPrimary").name()))
+            "p, li {{ line-height: 150%; color: {textSecondary}; }} h3, h4, h5, h6 {{ color: {textStrong}; }}"
+            " a {{ color: {accentHover}; }} code, pre {{ font-family: Consolas; color: {textPrimary}; }}"
+            " pre {{ background-color: {surfaceSecondary}; }}"
+            " blockquote {{ color: {textMuted}; margin-left: 12px; }}"
+            " table.md {{ border-collapse: collapse; border: 1px solid {borderStrong}; margin-top: 6px;"
+            " margin-bottom: 6px; }}"
+            " th {{ background-color: {surfaceTertiary}; color: {textStrong}; font-weight: bold;"
+            " border: 1px solid {borderStrong}; }}"
+            " td {{ color: {textSecondary}; border: 1px solid {borderStrong}; }}".format(**colors))
         browser.setHtml(html)
         layout.addWidget(browser)
         column = vbox(frame, spacing=12)
-        links = self._links(package)
+        links = self._links(package) if self.single_column else None  # wide windows show Links in the side column
         if links is not None:
             column.addWidget(links)
         holder.setLayout(column)
@@ -397,6 +472,14 @@ class DetailsPage(ScrollPage):
                 layout.addLayout(row)
         return frame
 
+    def _side_gallery(self, package):
+        frame, layout = section("Screenshots")
+        viewer = ScreenshotViewer(package.screenshots, self.manager_window.images, self.manager_window.themes,
+                                  compact=True)
+        viewer.preview_requested.connect(lambda index: self.manager_window.preview_screenshots(package.screenshots, index))
+        layout.addWidget(viewer)
+        return frame
+
     def _information(self, package):
         frame = QtWidgets.QFrame()
         frame.setObjectName("DetailsSection")
@@ -435,10 +518,6 @@ class DetailsPage(ScrollPage):
             layout.addWidget(button)
         row.setLayout(layout)
         return row
-
-
-def _rgba(color):
-    return "rgba({}, {}, {}, {})".format(color.red(), color.green(), color.blue(), color.alpha())
 
 
 __all__ = ["DetailsPage", "SINGLE_COLUMN", "IconLabel"]

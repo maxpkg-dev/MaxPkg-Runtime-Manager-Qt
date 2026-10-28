@@ -20,6 +20,9 @@ def main():
         if not name.startswith("maxpkg_runtime.domain") and name != "maxpkg_runtime":
             continue
         del sys.modules[name]
+    # A Max session keeps the test modules of the previous run: discover would run the old tests again.
+    for test_file in (ROOT / "tests" / "unit").glob("test_*.py"):
+        sys.modules.pop(test_file.stem, None)
     compile_errors = []
     for path in sorted(PYTHON.rglob("*.py")):
         try:

@@ -23,11 +23,11 @@ class IniTests(unittest.TestCase):
         try:
             path = os.path.join(folder, "settings.ini")
             document = IniDocument()
-            document.set("General", "Language", "Українська")
+            document.set("General", "Language", "Français ✓")  # non-ASCII must survive UTF-16
             document.save(path)
             with open(path, "rb") as stream:
                 self.assertTrue(stream.read(2) in (b"\xff\xfe", b"\xfe\xff"))
-            self.assertEqual(IniDocument.load(path).get("general", "language"), "Українська")
+            self.assertEqual(IniDocument.load(path).get("general", "language"), "Français ✓")
         finally:
             shutil.rmtree(folder)
 
@@ -142,6 +142,34 @@ class MarkdownTests(unittest.TestCase):
         self.assertIn("<b>bold</b>", html)
         self.assertIn("<ul><li>one</li><li>two</li></ul>", html)
         self.assertIn("&lt;script&gt;", html)
+
+    def test_tables(self):
+        html = markdown.to_html("| Format | Extensions |\n| --- | :---: |\n| 3ds Max | `.max` |\n| IGES | `.iges`, `.igs` |\n"
+                                "\nMAX files are merged.")
+        self.assertIn('<table class="md"', html)
+        self.assertIn('<th align="left">Format</th><th align="center">Extensions</th>', html)
+        self.assertIn('<td align="left">3ds Max</td><td align="center"><code>.max</code></td>', html)
+        self.assertIn("<code>.iges</code>, <code>.igs</code>", html)
+        self.assertIn("<p>MAX files are merged.</p>", html)
+        self.assertNotIn("| ---", html)
+
+    def test_github_syntax(self):
+        html = markdown.to_html("Title\n=====\n\n- [x] done\n- [ ] todo\n  - nested **bold**\n\n3. three\n4. four\n\n"
+                                "---\n\n~~old~~ __new__ _soft_ snake_case_name\\* see https://maxpkg.dev/docs.\n\n"
+                                "[Docs](/docs) [bad](javascript:alert(1)) ![shot](https://x.test/a.png)\n\n"
+                                "> quoted *text*\n\n~~~\n<b>raw</b>\n~~~")
+        self.assertIn("<h3>Title</h3>", html)
+        self.assertIn("☑ done", html)
+        self.assertIn("☐ todo<ul><li>nested <b>bold</b></li></ul>", html)
+        self.assertIn('<ol start="3"><li>three</li><li>four</li></ol>', html)
+        self.assertIn("<hr>", html)
+        self.assertIn("<s>old</s> <b>new</b> <i>soft</i> snake_case_name*", html)
+        self.assertIn('<a href="https://maxpkg.dev/docs">https://maxpkg.dev/docs</a>.', html)
+        self.assertIn('<a href="https://maxpkg.dev/docs">Docs</a>', html)
+        self.assertNotIn("javascript", html)
+        self.assertIn('<a href="https://x.test/a.png">shot</a>', html)
+        self.assertIn("<blockquote><p>quoted <i>text</i></p></blockquote>", html)
+        self.assertIn("<pre>&lt;b&gt;raw&lt;/b&gt;</pre>", html)
 
 
 if __name__ == "__main__":

@@ -388,34 +388,37 @@ class Runtime(QtCore.QObject):
         self.busy_changed.emit("")
 
     def install(self, reference, on_done=None):
-        """Resolve (API) and download (worker), then fileIn the MZP on the main thread and verify."""
+        """Resolve (API) and download asynchronously, then fileIn the MZP on the main thread and verify."""
         reference = (reference or "").strip()
         if not reference or not self._begin("Installing package..."):
             return False
         max_year = self.max_year
-        download_folder = self.paths.downloads
-        endpoint = self.settings.effective_endpoint
-        request = api.resolve_request(reference, max_year, self.version, self.api_channel)
 
-        def work(cancelled):
-            source, guid = reference, ""
-            if not source.lower().startswith(("http://", "https://")) and not os.path.isfile(source):
-                resolved = api.parse_details(network.http_post(request.url(endpoint), request.body()), max_year)
-                if not resolved.download_url:
-                    raise api.ApiError("ARTIFACT_NOT_FOUND", "The Runtime API did not provide a package DownloadUrl.")
-                source, guid = resolved.download_url, resolved.guid
-            if source.lower().startswith(("http://", "https://")):
-                target = os.path.join(download_folder, "maxpkg-download-" + uuid.uuid4().hex + ".mzp")
-                return network.http_download(source, target, cancelled), guid, True
-            return source, guid, False
+        def failed(error):
+            self._finish()
+            message = error.message if isinstance(error, api.ApiError) else network.describe(error)
+            self.notify.emit("Package could not be installed.\n" + message, "error")
+            if on_done:
+                on_done(False)
+
+        def fetch(source, guid):
+            if not source.lower().startswith(("http://", "https://")):
+                done((source, guid, False), None)
+                return
+            target = os.path.join(self.paths.downloads, "maxpkg-download-" + uuid.uuid4().hex + ".mzp")
+            self.network.download(source, target, lambda path, error: done((path, guid, True), error))
+
+        def resolved(package, error):
+            if error is not None:
+                failed(error)
+            elif not package.download_url:
+                failed(api.ApiError("ARTIFACT_NOT_FOUND", "The MaxPkg service did not provide a download for this package."))
+            else:
+                fetch(package.download_url, package.guid)
 
         def done(result, error):
             if error is not None:
-                self._finish()
-                message = error.message if isinstance(error, api.ApiError) else network.describe(error)
-                self.notify.emit("Package could not be installed.\n" + message, "error")
-                if on_done:
-                    on_done(False)
+                failed(error)
                 return
             path, guid, temporary = result
             guid = guid or _guid_from_file_name(path)
@@ -432,7 +435,11 @@ class Runtime(QtCore.QObject):
             if on_done:
                 on_done(ok)
 
-        self.network.submit(work, done)
+        if reference.lower().startswith(("http://", "https://")) or os.path.isfile(reference):
+            fetch(reference, "")
+        else:
+            self._post(api.resolve_request(reference, max_year, self.version, self.api_channel),
+                       lambda text: api.parse_details(text, max_year), resolved)
         return True
 
     def _install_file(self, path, guid):

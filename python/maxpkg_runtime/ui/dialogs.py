@@ -2,7 +2,7 @@
 (light text) but keeps the native button background, so its buttons become white without readable text."""
 
 from ..qt_compat import QtCore, QtGui, QtWidgets, Qt
-from .frame import EDGE, WindowChrome, apply_native_frame, paint_window_shape, prepare_window
+from .frame import EDGE, WindowChrome, apply_native_frame, glass_border, native_event, paint_window_shape, prepare_window
 from .widgets import Button, IconLabel, hbox, label, vbox
 
 
@@ -39,12 +39,16 @@ class ConfirmDialog(QtWidgets.QDialog):
     def paintEvent(self, _event):
         theme = self.themes.manager
         painter = QtGui.QPainter(self)
-        paint_window_shape(self, painter, theme.color("surfacePrimary"), theme.color("textDisabled"))
+        paint_window_shape(self, painter, theme.color("surfacePrimary"), glass_border(theme.color("surfacePrimary")))
         painter.end()
+
+    def nativeEvent(self, event_type, message):
+        handled = native_event(self, message)
+        return handled if handled is not None else QtWidgets.QDialog.nativeEvent(self, event_type, message)
 
     def showEvent(self, event):
         QtWidgets.QDialog.showEvent(self, event)
-        apply_native_frame(self, self.themes.color("textDisabled"))
+        apply_native_frame(self, glass_border(self.themes.color("surfacePrimary")))
         parent = self.parentWidget()
         if parent is not None:
             center = parent.frameGeometry().center()

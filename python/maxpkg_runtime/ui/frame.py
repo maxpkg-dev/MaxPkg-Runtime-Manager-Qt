@@ -18,9 +18,23 @@ EDGE = 4
 WINDOW_RADIUS = 8.0  # Windows 11 DWM "round" corners use 8 px
 
 
+class _OsVersion(ctypes.Structure):
+    _fields_ = [("size", ctypes.c_ulong), ("major", ctypes.c_ulong), ("minor", ctypes.c_ulong),
+                ("build", ctypes.c_ulong), ("platform", ctypes.c_ulong), ("csd", ctypes.c_wchar * 128)]
+
+
 def _windows_build():
+    """Real Windows build. sys.getwindowsversion() inside 3ds Max reports the compatibility version
+    (build 9200), because the Max executable does not declare Windows 10/11 support in its manifest."""
     if sys.platform != "win32":
         return 0
+    try:
+        info = _OsVersion()
+        info.size = ctypes.sizeof(info)
+        if ctypes.windll.ntdll.RtlGetVersion(ctypes.byref(info)) == 0:
+            return info.build
+    except (AttributeError, OSError):
+        pass
     try:
         return sys.getwindowsversion().build
     except AttributeError:
@@ -43,12 +57,76 @@ def prepare_window(widget):
         widget.setAttribute(Qt.WA_TranslucentBackground)
 
 
+def glass_border(background, amount=0.09):
+    """Window outline a touch lighter than its background (darker on light themes): a glass edge, not a gray line."""
+    color = QtGui.QColor(background)
+    target = 0 if color.lightness() > 160 else 255
+    mix = lambda channel: int(round(channel + (target - channel) * amount))  # noqa: E731
+    return QtGui.QColor(mix(color.red()), mix(color.green()), mix(color.blue()))
+
+
+class _Msg(ctypes.Structure):
+    _fields_ = [("hwnd", ctypes.c_void_p), ("message", ctypes.c_uint), ("wParam", ctypes.c_size_t),
+                ("lParam", ctypes.c_ssize_t), ("time", ctypes.c_uint), ("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class _Rect(ctypes.Structure):
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+
+_GWL_STYLE = -16
+_WS_FRAME = 0x00040000 | 0x00C00000  # WS_THICKFRAME | WS_CAPTION: DWM only shadows windows with a frame style
+_SWP_REFRAME = 0x0020 | 0x0001 | 0x0002 | 0x0004 | 0x0010  # FRAMECHANGED | NOSIZE | NOMOVE | NOZORDER | NOACTIVATE
+_WM_NCCALCSIZE = 0x0083
+
+
+def _add_frame_style(hwnd):
+    user32 = ctypes.windll.user32
+    user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user32.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+    style = user32.GetWindowLongPtrW(hwnd, _GWL_STYLE)
+    if style & _WS_FRAME != _WS_FRAME:
+        user32.SetWindowLongPtrW(hwnd, _GWL_STYLE, style | _WS_FRAME)
+        user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, _SWP_REFRAME)
+
+
+def native_event(widget, message):
+    """Call from `nativeEvent`: (True, 0) for WM_NCCALCSIZE so the frame style adds no visible border, else None.
+
+    A maximised framed window hangs over the screen edge by the resize border, so its client rect is inset.
+    """
+    if not NATIVE_FRAME:
+        return None
+    try:
+        msg = _Msg.from_address(int(message))
+        if msg.message != _WM_NCCALCSIZE or not msg.wParam:
+            return None
+        user32 = ctypes.windll.user32
+        if user32.IsZoomed(ctypes.c_void_p(msg.hwnd)):
+            dpi = user32.GetDpiForWindow(ctypes.c_void_p(msg.hwnd)) or 96
+            border = user32.GetSystemMetricsForDpi(32, dpi) + user32.GetSystemMetricsForDpi(92, dpi)
+            rect = _Rect.from_address(msg.lParam)  # NCCALCSIZE_PARAMS starts with the proposed window rect
+            rect.left += border
+            rect.top += border
+            rect.right -= border
+            rect.bottom -= border
+        return True, 0
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
 def apply_native_frame(widget, border_color=None):
-    """System shadow, rounded corners and border color for a frameless window (Windows 11). Safe to repeat."""
+    """System shadow, rounded corners and border color for a frameless window (Windows 11). Safe to repeat.
+
+    The widget must forward `nativeEvent` to `native_event`, or the frame style shows a Windows border.
+    """
     if not NATIVE_FRAME:
         return False
     try:
         hwnd = ctypes.c_void_p(int(widget.winId()))
+        _add_frame_style(hwnd)
         dwm = ctypes.windll.dwmapi
         margins = _Margins(1, 1, 1, 1)  # a 1 px extended frame makes DWM draw the shadow of a popup window
         dwm.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(margins))
@@ -153,7 +231,7 @@ class WindowChrome(QtCore.QObject):
         mini.setContentsMargins(4, 2, 2, 2)
         mini.setSpacing(4)
         self.mini_grip = QtWidgets.QLabel()
-        self.mini_grip.setFixedSize(18, 26)
+        self.mini_grip.setFixedSize(18, 28)
         self.mini_grip.setAlignment(Qt.AlignCenter)
         self.mini_grip.setCursor(Qt.SizeAllCursor)
         self.mini_grip.setToolTip("Drag to move")
@@ -169,7 +247,7 @@ class WindowChrome(QtCore.QObject):
         mini.addWidget(self.mini_title, 1)
         mini_close = IconButton("x", "Close MaxPkg Manager", themes)
         mini_close.setObjectName("ChromeButton")
-        mini_close.setFixedSize(26, 26)
+        mini_close.setFixedSize(28, 28)  # same size as the ChromeButton rule and the title next to it
         mini_close.clicked.connect(window.close)
         mini.addWidget(mini_close)
         self.mini_bar.hide()

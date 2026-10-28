@@ -5,7 +5,8 @@ from ..qt_compat import QtCore, QtGui, QtWidgets, Qt
 from . import icons
 from .cards import DRAG_MIME, InstalledCard, RemoteCard
 from .theme import css_color, with_alpha
-from .widgets import Button, FlowRow, ResponsiveGrid, StatePanel, hbox, label, repolish, vbox
+from .widgets import (Button, EdgeFade, FlowRow, ResponsiveGrid, StatePanel, hbox, label, paint_check, repolish,
+                      vbox)
 
 WIDE_DISCOVER = 1200
 
@@ -25,6 +26,8 @@ class ScrollPage(QtWidgets.QScrollArea):
         self.setWidget(self.canvas)
         self.viewport().setAutoFillBackground(False)
         self.canvas.setAutoFillBackground(False)
+        # Content fades into the window background at the edges instead of being cut off.
+        self.fades = (EdgeFade(self, "top"), EdgeFade(self, "bottom"))
 
 
 class InstalledPage(ScrollPage):
@@ -94,7 +97,7 @@ class InstalledPage(ScrollPage):
                 title, text = "No packages match", "Try a different search or filter."
             else:
                 title = "No packages installed"
-                text = "Installed packages will appear here as soon as Runtime discovers their manifests."
+                text = "Installed packages will appear here as soon as the Package Manager discovers their manifests."
             if self.view == "updates" and self.runtime.packages and not self.search:
                 title, text = "Everything is up to date", "Use Check Updates to look for new versions."
             self.state = StatePanel(self.manager_window.themes, "package", title, text, "Refresh", "refresh-cw")
@@ -395,6 +398,7 @@ class CategoryButton(QtWidgets.QPushButton):
         self._name = name
         self._count = count
         self.setMinimumHeight(36)
+        self.setAttribute(Qt.WA_Hover)  # the check box outline brightens under the mouse
 
     def sizeHint(self):
         return QtCore.QSize(200, 36)
@@ -404,20 +408,8 @@ class CategoryButton(QtWidgets.QPushButton):
         theme = self._themes.manager
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        box = QtCore.QRectF(10.5, (self.height() - 14) / 2.0, 14, 14)
-        if self.isChecked():
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(theme.color("selectionBlue"))
-            painter.drawRoundedRect(box, 3, 3)
-            pen = QtGui.QPen(theme.color("selectionBlueText"), 1.8)
-            painter.setPen(pen)
-            painter.drawPolyline(QtGui.QPolygonF([QtCore.QPointF(box.left() + 3, box.center().y()),
-                                                  QtCore.QPointF(box.left() + 6, box.bottom() - 3.5),
-                                                  QtCore.QPointF(box.right() - 3, box.top() + 3.5)]))
-        else:
-            painter.setPen(QtGui.QPen(theme.color("borderStrong"), 1))
-            painter.setBrush(theme.color("surfaceDisabled"))
-            painter.drawRoundedRect(box, 3, 3)
+        box = QtCore.QRectF(10, (self.height() - 16) / 2.0, 16, 16)
+        paint_check(painter, box, self.isChecked(), self.underMouse(), theme, dpr=self.devicePixelRatioF())
         painter.setPen(theme.color("textStrong" if self.isChecked() else "textSecondary"))
         text_rect = QtCore.QRect(34, 0, self.width() - 70, self.height())
         painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft,

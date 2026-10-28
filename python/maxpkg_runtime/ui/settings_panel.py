@@ -2,7 +2,8 @@
 
 from ..domain.settings import normalize_endpoint
 from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal, disable_max_accelerators
-from .frame import EDGE, WindowChrome, apply_native_frame, bounded_position, paint_window_shape, prepare_window
+from .frame import (EDGE, WindowChrome, apply_native_frame, bounded_position, glass_border, native_event,
+                    paint_window_shape, prepare_window)
 from .toolbar import ToolbarPreview, ToolbarStyle
 from .widgets import Button, Dropdown, IconLabel, Switch, hbox, label, vbox
 
@@ -179,12 +180,16 @@ class SettingsPanel(QtWidgets.QWidget):
     def paintEvent(self, _event):
         theme = self.themes.manager
         painter = QtGui.QPainter(self)
-        paint_window_shape(self, painter, theme.color("surfacePrimary"), theme.color("textDisabled"))
+        paint_window_shape(self, painter, theme.color("surfacePrimary"), glass_border(theme.color("surfacePrimary")))
         painter.end()
+
+    def nativeEvent(self, event_type, message):
+        handled = native_event(self, message)
+        return handled if handled is not None else QtWidgets.QWidget.nativeEvent(self, event_type, message)
 
     def showEvent(self, event):
         QtWidgets.QWidget.showEvent(self, event)
-        apply_native_frame(self, self.themes.color("textDisabled"))
+        apply_native_frame(self, glass_border(self.themes.color("surfacePrimary")))
 
     def mousePressEvent(self, event):
         if not self.chrome.mouse_press(event):
@@ -229,7 +234,7 @@ class SettingsPanel(QtWidgets.QWidget):
         self.language = Dropdown(themes, [("English", "English")])
         self.language.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
         general.addWidget(self.language)
-        self._switch("general", "Start Runtime with 3ds Max", "auto_start")
+        self._switch("general", "Start Package Manager with 3ds Max", "auto_start")
         self._switch("general", "Open Manager on startup", "open_manager_on_startup")
         self._switch("general", "Show notifications", "notifications")
         self._switch("general", "Show full package cards in Installed views", "manager_full_cards", "cards")
@@ -238,7 +243,7 @@ class SettingsPanel(QtWidgets.QWidget):
         updates = self.pages["updates"]
         updates.addWidget(label("Updates", "PageTitle"))
         self._switch("updates", "Check package updates automatically", "auto_check_packages", "updates")
-        self._switch("updates", "Check Runtime updates automatically", "auto_check_runtime", "updates")
+        self._switch("updates", "Check Package Manager updates automatically", "auto_check_runtime", "updates")
         self._switch("updates", "Download updates automatically", "download_automatically", "updates")
         updates.addWidget(label("Check interval", "FieldLabel"))
         self.frequency = Dropdown(themes, [(hours, text) for hours, text in FREQUENCIES])
@@ -267,7 +272,7 @@ class SettingsPanel(QtWidgets.QWidget):
         self._switch("developer", "Enable developer mode", "developer_mode", "developer",
                      after=lambda: self.nav_buttons["endpoint"].setVisible(self.runtime.settings.developer_mode))
         self._switch("developer", "Enable debug logging", "debug_logging", "developer")
-        page.addWidget(label("Developer settings affect Runtime diagnostics only. Package manifests remain read-only.",
+        page.addWidget(label("Developer settings affect Package Manager diagnostics only. Package manifests remain read-only.",
                              "Muted", wrap=True))
         page.addStretch(1)
 
@@ -284,7 +289,7 @@ class SettingsPanel(QtWidgets.QWidget):
         self._endpoint_timer.timeout.connect(self._flush_endpoint)
         self.endpoint.textEdited.connect(lambda _text: self._endpoint_timer.start())
         page.addWidget(self.endpoint)
-        page.addWidget(label("The configured override is shown here. Without one, Runtime uses its built-in production "
+        page.addWidget(label("The configured override is shown here. Without one, the Package Manager uses its built-in production "
                              "endpoint. API action names such as updates and runtime are appended automatically.",
                              "Muted", wrap=True))
         page.addStretch(1)
@@ -294,14 +299,16 @@ class SettingsPanel(QtWidgets.QWidget):
         self.about_version = label("", "")
         page.addWidget(self.about_version)
         page.addWidget(label("MaxPkg is a package ecosystem for Autodesk 3ds Max. It connects developers, the maxpkg.dev "
-                             "catalog, and the Runtime inside 3ds Max into one distribution workflow.", "", wrap=True))
+                             "catalog, and the Package Manager inside 3ds Max into one distribution workflow.", "", wrap=True))
         page.addWidget(label("Users can discover, install, run, update, and remove scripts in one place. Developers "
                              "build and publish versioned tools with MaxPkg Packager—eliminating scattered "
                              "installers, duplicate toolbar buttons, and inconsistent script versions across artists, "
                              "workstations, and studios.", "", wrap=True))
-        copy = Button("Copy Runtime info", "copy", "default", themes)
+        copy = Button("Copy Package Manager info", "copy", "default", themes)
         copy.clicked.connect(self._copy_info)
-        page.addWidget(copy, 0, Qt.AlignLeft)
+        welcome = Button("Show welcome window", "sparkles", "default", themes)
+        welcome.clicked.connect(lambda: getattr(self.manager_window, "show_welcome", lambda: None)())
+        page.addLayout(hbox(copy, welcome, None, spacing=12))
         page.addStretch(1)
 
         self._build_uninstall_page()
@@ -368,7 +375,7 @@ class SettingsPanel(QtWidgets.QWidget):
         themes = self.themes
         page = self.pages["uninstall"]
         page.addWidget(label("Uninstall MaxPkg", "PageTitle"))
-        page.addWidget(label("Remove MaxPkg Runtime, Manager, toolbar, startup entry, settings, and local Runtime files "
+        page.addWidget(label("Remove the MaxPkg Package Manager, its toolbar, startup entry, settings, and local files "
                              "from this 3ds Max installation.", "", wrap=True))
         notice = QtWidgets.QFrame()
         notice.setObjectName("Notice")
@@ -429,10 +436,10 @@ class SettingsPanel(QtWidgets.QWidget):
     def _copy_info(self):
         from ..qt_compat import binding_info
         runtime = self.runtime
-        text = "MaxPkg Runtime (Qt) {} ({})\n3ds Max {}\n{}\nPackages: {}\nSettings: {}".format(
+        text = "MaxPkg Package Manager {} ({})\n3ds Max {}\n{}\nPackages: {}\nSettings: {}".format(
             runtime.version, runtime.channel, runtime.max_year, binding_info(), len(runtime.packages),
             runtime.settings.path)
-        self.manager_window.copy_text(text, "Runtime info copied.")
+        self.manager_window.copy_text(text, "Package Manager info copied.")
 
     # --- state -> controls ----------------------------------------------------------
     def _on_settings_changed(self, area):
@@ -451,7 +458,7 @@ class SettingsPanel(QtWidgets.QWidget):
             if not self.endpoint.hasFocus():
                 self.endpoint.setText(settings.api_endpoint)
             self.nav_buttons["endpoint"].setVisible(settings.developer_mode)
-            self.about_version.setText("Runtime {} ({})".format(self.runtime.version, self.runtime.channel))
+            self.about_version.setText("Package Manager {} ({})".format(self.runtime.version, self.runtime.channel))
             values = {"position": settings.toolbar_dock_position, "density": settings.toolbar_density,
                       "icon": settings.toolbar_icon_size, "width": settings.toolbar_button_size,
                       "subtitle": settings.toolbar_subtitle_mode}

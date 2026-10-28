@@ -1,4 +1,4 @@
-"""MaxPkg Runtime API: form fields and INI response parsing (port of core/repository.ms).
+"""MaxPkg service API: form fields and INI response parsing (port of core/repository.ms).
 
 All endpoints are POST application/x-www-form-urlencoded; responses are INI text.
 """
@@ -105,7 +105,7 @@ def _document(text):
     code = document.get("error", "Code")
     message = document.get("error", "Message")
     if code or message:
-        raise ApiError(code or "API_ERROR", message or "The Runtime API returned an error.",
+        raise ApiError(code or "API_ERROR", message or "The MaxPkg service returned an error.",
                        document.get("error", "RequestId"))
     return document
 

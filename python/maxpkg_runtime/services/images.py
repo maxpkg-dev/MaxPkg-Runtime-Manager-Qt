@@ -18,7 +18,11 @@ SVG_RENDER_SIZE = 256
 
 
 def _decode(path):
-    """QImage from a file; SVG is rendered at a fixed size so it stays sharp when scaled down."""
+    """QImage from a file; SVG is rendered at a fixed size so it stays sharp when scaled down.
+
+    Call it for SVG on the main thread only: several QSvgRenderer instances rendering at the same time in
+    pool threads made some icons fail at startup (seen in 3ds Max 2027 / Qt 6.8).
+    """
     if path.lower().endswith(".svg"):
         renderer = QtSvg.QSvgRenderer(path)
         if not renderer.isValid():
@@ -63,18 +67,17 @@ class ImageService(QtCore.QObject):
         pixmap = self._memory.get(source)
         if pixmap is not None or source in self._pending or source in self._failed:
             return pixmap
-        self._pending.add(source)
         remote = source.lower().startswith(("http://", "https://"))
         target = self._cache_path(source) if remote else source
-
-        def work(cancelled):
-            if remote and not os.path.isfile(target):
-                network.http_download(source, target, cancelled, MAX_IMAGE_BYTES)
+        if not remote or os.path.isfile(target):
+            # Local icon or cached download: decode now (small files; SVG must render on the main thread).
             if remote:
                 os.utime(target, None)  # most recently used survives pruning
-            return _decode(target)
-
-        self._network.submit(work, lambda image, error: self._loaded(source, image, error))
+            self._loaded(source, target, None)
+            return self._memory.get(source)
+        self._pending.add(source)
+        self._network.download(source, target, lambda path, error: self._loaded(source, path, error),
+                               MAX_IMAGE_BYTES)
         return None
 
     def _cache_path(self, url):
@@ -83,6 +86,8 @@ class ImageService(QtCore.QObject):
 
     def _loaded(self, source, image, error):
         self._pending.discard(source)
+        if error is None and isinstance(image, str):
+            image = _decode(image)  # file path: decoded on the main thread
         if error is not None or image is None:
             self._failed.add(source)
             if error is not None:

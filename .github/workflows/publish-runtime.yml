@@ -1,0 +1,133 @@
+name: Publish MaxPkg Package Manager
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Runtime version from version.ini
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-maxpkg-runtime-qt
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish Runtime
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Require the main branch
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Releases must be published from the main branch."
+            exit 1
+          fi
+
+      - name: Validate release target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="v${RELEASE_VERSION}"
+
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "GitHub Release ${RELEASE_TAG} already exists; publication will resume."
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            TAG_COMMIT="$(git rev-list -n 1 "${RELEASE_TAG}")"
+            if [[ "${TAG_COMMIT}" != "${GITHUB_SHA}" ]]; then
+              echo "Git tag ${RELEASE_TAG} points to ${TAG_COMMIT}, not ${GITHUB_SHA}."
+              exit 1
+            fi
+            echo "Git tag ${RELEASE_TAG} already points to this release commit; publication will resume."
+          fi
+
+      - name: Build and validate MZP
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python .github/scripts/build_mzp.py \
+            --root . \
+            --manifest .github/mzp-files.txt \
+            --output dist/MaxPkg-Runtime-Manager-Qt.mzp \
+            --version "${RELEASE_VERSION}" \
+            --changelog CHANGELOG.md \
+            --notes-output dist/release-notes.md
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -u
+
+          RELEASE_TAG="v${RELEASE_VERSION}"
+          MAX_ATTEMPTS=5
+          # Channel=preview (or anything but stable) publishes a pre-release; stable becomes the latest release.
+          # version.ini may be UTF-16 (MaxScript setINISetting) or UTF-8.
+          RELEASE_CHANNEL="$(python3 -c "import re; d=open('version.ini','rb').read(); t=d.decode('utf-16') if d[:2] in (b'\xff\xfe', b'\xfe\xff') else d.decode('utf-8-sig'); m=re.search(r'(?mi)^Channel=(\S+)', t); print(m.group(1) if m else '')")"
+          if [[ "${RELEASE_CHANNEL,,}" == "stable" ]]; then
+            RELEASE_KIND="--latest"
+          else
+            RELEASE_KIND="--prerelease"
+          fi
+
+          for ATTEMPT in $(seq 1 "${MAX_ATTEMPTS}"); do
+            if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              echo "GitHub Release ${RELEASE_TAG} already exists; continuing with asset upload."
+              break
+            fi
+
+            if gh release create "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "MaxPkg Package Manager ${RELEASE_VERSION}" \
+              --notes-file dist/release-notes.md \
+              "${RELEASE_KIND}"; then
+              break
+            fi
+
+            if [[ "${ATTEMPT}" -eq "${MAX_ATTEMPTS}" ]]; then
+              echo "Could not create GitHub Release ${RELEASE_TAG} after ${MAX_ATTEMPTS} attempts."
+              exit 1
+            fi
+
+            RETRY_DELAY=$((ATTEMPT * 15))
+            echo "GitHub API request failed. Retrying release creation in ${RETRY_DELAY} seconds..."
+            sleep "${RETRY_DELAY}"
+          done
+
+          for ATTEMPT in $(seq 1 "${MAX_ATTEMPTS}"); do
+            if gh release upload "${RELEASE_TAG}" \
+              dist/MaxPkg-Runtime-Manager-Qt.mzp \
+              dist/MaxPkg-Runtime-Manager-Qt.sha256 \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber; then
+              exit 0
+            fi
+
+            if [[ "${ATTEMPT}" -eq "${MAX_ATTEMPTS}" ]]; then
+              echo "Could not upload release assets after ${MAX_ATTEMPTS} attempts."
+              exit 1
+            fi
+
+            RETRY_DELAY=$((ATTEMPT * 15))
+            echo "GitHub API request failed. Retrying asset upload in ${RETRY_DELAY} seconds..."
+            sleep "${RETRY_DELAY}"
+          done

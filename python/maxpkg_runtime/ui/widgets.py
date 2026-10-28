@@ -3,6 +3,8 @@
 Variants are Qt properties read by assets/manager.qss (``variant``, ``badge``, ``compact``...).
 """
 
+import math
+
 from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal, disable_max_accelerators, is_valid
 from . import icons
 
@@ -95,6 +97,7 @@ class Button(QtWidgets.QPushButton):
         self.setText("" if icon_only else self._full_text)
         self.setProperty("iconOnly", "true" if icon_only else "false")
         self.setToolTip(self._full_text)
+        self._reapply_icon()
         repolish(self)
 
     def set_label(self, text):
@@ -102,6 +105,16 @@ class Button(QtWidgets.QPushButton):
         if self.property("iconOnly") != "true":
             self.setText(text)
         self.setToolTip(text)
+        self._reapply_icon()
+
+    def _reapply_icon(self):
+        if self.icon_name and self._themes is not None:
+            self._themes.reapply(self)
+
+    def changeEvent(self, event):
+        QtWidgets.QPushButton.changeEvent(self, event)
+        if event.type() == QtCore.QEvent.LayoutDirectionChange:
+            self._reapply_icon()
 
 
 class IconButton(Button):
@@ -385,8 +398,447 @@ class StatePanel(QtWidgets.QFrame):
             items.append(self.action)
         layout = vbox(spacing=10, margins=(28, 28, 28, 28))
         for widget in items:
-            layout.addWidget(widget, 0, Qt.AlignHCenter)
+            if isinstance(widget, QtWidgets.QLabel) and widget is not glyph:
+                # Full width + centered text: an AlignHCenter layout item gives a wrapped label too little height.
+                layout.addWidget(widget)
+            else:
+                layout.addWidget(widget, 0, Qt.AlignHCenter)
         self.setLayout(layout)
+
+
+DRAG_THRESHOLD = 6  # px of movement before a press becomes a drag instead of a click
+SWIPE_DISTANCE = 40  # px of horizontal drag that switches to the next/previous image
+
+
+def _event_x(event):
+    position = event.globalPosition() if hasattr(event, "globalPosition") else event.globalPos()
+    return position.x()
+
+
+class DragScroll(QtCore.QObject):
+    """Drag a horizontal QScrollArea (and the buttons inside it) with the mouse; a plain click still clicks."""
+
+    def __init__(self, area):
+        QtCore.QObject.__init__(self, area)
+        self.area = area
+        self._start = None  # (x, scroll value, pressed widget)
+        self._dragging = False
+        area.viewport().installEventFilter(self)
+        area.viewport().setCursor(Qt.OpenHandCursor)
+
+    def watch(self, widget):
+        widget.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        kind = event.type()
+        if kind == QtCore.QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            self._start = (_event_x(event), self.area.horizontalScrollBar().value(), watched)
+            self._dragging = False
+        elif kind == QtCore.QEvent.MouseMove and self._start is not None and event.buttons() & Qt.LeftButton:
+            delta = _event_x(event) - self._start[0]
+            if not self._dragging and abs(delta) > DRAG_THRESHOLD:
+                self._dragging = True
+                self.area.viewport().setCursor(Qt.ClosedHandCursor)
+                pressed = self._start[2]
+                if isinstance(pressed, QtWidgets.QAbstractButton):
+                    pressed.setDown(False)  # the drag must not end as a click
+            if self._dragging:
+                self.area.horizontalScrollBar().setValue(int(self._start[1] - delta))
+                return True
+        elif kind == QtCore.QEvent.MouseButtonRelease and self._start is not None:
+            dragged = self._dragging
+            self._start = None
+            self._dragging = False
+            if dragged:
+                self.area.viewport().setCursor(Qt.OpenHandCursor)
+                return True
+        return False
+
+
+class Swipe(QtCore.QObject):
+    """Horizontal drag on a widget: `dragged(dx)` while it moves, `released(dx)` when it ends,
+    `clicked()` for a press and release without a drag."""
+
+    dragged = Signal(int)
+    released = Signal(int)
+    clicked = Signal()
+
+    def __init__(self, widget):
+        QtCore.QObject.__init__(self, widget)
+        self._start = None
+        self._dragging = False
+        self._cursor = None
+        widget.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        kind = event.type()
+        if kind == QtCore.QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            self._start = _event_x(event)
+            self._dragging = False
+            return True
+        if kind == QtCore.QEvent.MouseMove and self._start is not None:
+            delta = _event_x(event) - self._start
+            if not self._dragging and abs(delta) > DRAG_THRESHOLD:
+                self._dragging = True
+                self._cursor = watched.cursor()
+                watched.setCursor(Qt.ClosedHandCursor)
+            if self._dragging:
+                self.dragged.emit(int(delta))
+            return self._dragging
+        if kind == QtCore.QEvent.MouseButtonRelease and self._start is not None and event.button() == Qt.LeftButton:
+            delta = _event_x(event) - self._start
+            dragged = self._dragging
+            self._start = None
+            self._dragging = False
+            if dragged:
+                watched.setCursor(self._cursor)
+                self.released.emit(int(delta))
+            else:
+                self.clicked.emit()
+            return True
+        return False
+
+
+class SlideView(QtWidgets.QWidget):
+    """Image carousel: the current image follows a horizontal drag with its neighbour sliding in beside it; a
+    drag past SWIPE_DISTANCE (or `slide(step)`) animates to that neighbour, a shorter one springs back.
+
+    `pixmap_for(index)` returns a QPixmap or None (still loading). `clicked()` is a press without a drag.
+    """
+
+    index_changed = Signal(int)
+    clicked = Signal()
+    GAP = 24
+
+    def __init__(self, count, pixmap_for, themes, radius=0, inset=2, parent=None):
+        """radius: rounded clip of the frame; inset: side margin each image is fitted into (slides still cross
+        the whole widget)."""
+        QtWidgets.QWidget.__init__(self, parent)
+        self.setAttribute(Qt.WA_StyledBackground)  # the #ScreenshotMain frame still comes from the stylesheet
+        self.count = count
+        self.pixmap_for = pixmap_for
+        self.themes = themes
+        self.radius = radius
+        self.inset = inset
+        self.index = 0
+        self.offset = 0.0
+        self._scaled = {}  # index -> (source cacheKey, target size, scaled pixmap)
+        self._animation = QtCore.QVariantAnimation(self)
+        self._animation.setDuration(240)
+        self._animation.setEasingCurve(QtCore.QEasingCurve.OutCubic)
+        self._animation.valueChanged.connect(self._set_offset)
+        self._animation.finished.connect(self._settle)
+        self._target_step = 0
+        # Preloader: a spinning arc where an image is still downloading; the timer runs only while one shows.
+        self._spin = QtCore.QElapsedTimer()
+        self._spin.start()
+        self._spin_timer = QtCore.QTimer(self)
+        self._spin_timer.setInterval(33)
+        self._spin_timer.timeout.connect(self.update)
+        self._swipe = Swipe(self)
+        self._swipe.dragged.connect(self._on_drag)
+        self._swipe.released.connect(self._on_release)
+        self._swipe.clicked.connect(self.clicked.emit)
+
+    def set_index(self, index):
+        self._animation.stop()
+        self.index = index % self.count if self.count else 0
+        self.offset = 0.0
+        self.update()
+        self.index_changed.emit(self.index)
+
+    def slide(self, step):
+        """Animate to the next (+1) or previous (-1) image."""
+        if self.count < 2:
+            return
+        if self._animation.state() == QtCore.QAbstractAnimation.Running:
+            self._animation.stop()
+            self._settle()
+        self._animate_to(step)
+
+    def refresh(self):
+        self.update()
+
+    def _span(self):
+        return self.width() + self.GAP
+
+    def _set_offset(self, value):
+        self.offset = float(value)
+        self.update()
+
+    def _animate_to(self, step):
+        self._target_step = step
+        self._animation.setStartValue(float(self.offset))
+        self._animation.setEndValue(float(-step * self._span()))
+        self._animation.start()
+
+    def _on_drag(self, delta):
+        if self.count < 2:
+            return
+        self._animation.stop()
+        self._set_offset(max(-self._span(), min(self._span(), delta)))
+
+    def _on_release(self, delta):
+        if self.count < 2:
+            return
+        self._animate_to(0 if abs(delta) < SWIPE_DISTANCE else (1 if delta < 0 else -1))
+
+    def _settle(self):
+        step, self._target_step = self._target_step, 0
+        if step:
+            self.index = (self.index + step) % self.count
+            self.index_changed.emit(self.index)
+        self.offset = 0.0
+        self.update()
+
+    def resizeEvent(self, event):
+        QtWidgets.QWidget.resizeEvent(self, event)
+        self._scaled = {}
+
+    def _scaled_pixmap(self, index, size):
+        source = self.pixmap_for(index)
+        if source is None:
+            return None
+        cached = self._scaled.get(index)
+        if cached is not None and cached[0] == source.cacheKey() and cached[1] == size:
+            return cached[2]
+        dpr = self.devicePixelRatioF()
+        # Never enlarge: a small screenshot keeps its real size, a large one shrinks to fit.
+        natural = source.size()
+        fitted = natural if natural.width() <= size.width() and natural.height() <= size.height() else \
+            natural.scaled(size, Qt.KeepAspectRatio)
+        scaled = source.scaled(int(fitted.width() * dpr), int(fitted.height() * dpr), Qt.KeepAspectRatio,
+                               Qt.SmoothTransformation)
+        scaled.setDevicePixelRatio(dpr)
+        self._scaled[index] = (source.cacheKey(), size, scaled)
+        return scaled
+
+    def paintEvent(self, event):
+        QtWidgets.QWidget.paintEvent(self, event)
+        option = QtWidgets.QStyleOption()
+        option.initFrom(self)
+        painter = QtGui.QPainter(self)
+        self.style().drawPrimitive(QtWidgets.QStyle.PE_Widget, option, painter, self)
+        if not self.count:
+            painter.end()
+            return
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        frame = QtCore.QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        if self.radius:
+            clip = QtGui.QPainterPath()
+            clip.addRoundedRect(frame, self.radius, self.radius)
+            painter.setClipPath(clip)
+        area = QtCore.QRectF(self.rect()).adjusted(self.inset, 2, -self.inset, -2)
+        size = QtCore.QSize(int(area.width()), int(area.height()))
+        neighbours = (-1, 0, 1) if self.count > 1 else (0,)
+        loading = False
+        for step in neighbours:
+            left = area.left() + step * self._span() + self.offset
+            if left - self.inset >= frame.right() or left + area.width() + self.inset <= frame.left():
+                continue
+            pixmap = self._scaled_pixmap((self.index + step) % self.count, size)
+            if pixmap is None:
+                loading = True
+                self._paint_preloader(painter, QtCore.QPointF(left + area.width() / 2.0, area.center().y()))
+                continue
+            logical = pixmap.size() / pixmap.devicePixelRatio()
+            target = QtCore.QRectF(left + (area.width() - logical.width()) / 2.0,
+                                   area.top() + (area.height() - logical.height()) / 2.0,
+                                   logical.width(), logical.height())
+            painter.drawPixmap(target, pixmap, QtCore.QRectF(pixmap.rect()))
+        painter.end()
+        if loading and not self._spin_timer.isActive():
+            self._spin_timer.start()
+        elif not loading and self._spin_timer.isActive():
+            self._spin_timer.stop()
+
+    def _paint_preloader(self, painter, center):
+        """A faint ring with an accent arc that turns and breathes in length."""
+        theme = self.themes.manager
+        seconds = self._spin.elapsed() / 1000.0
+        ring = QtCore.QRectF(center.x() - 14, center.y() - 14, 28, 28)
+        pen = QtGui.QPen(theme.color("borderStrong"), 3)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(ring)
+        pen.setColor(theme.color("accent"))
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        start = -seconds * 300.0
+        span = 60.0 + 120.0 * (0.5 + 0.5 * math.sin(seconds * 3.2))
+        painter.drawArc(ring, int(start * 16), int(-span * 16))
+
+    def hideEvent(self, event):
+        self._spin_timer.stop()
+        QtWidgets.QWidget.hideEvent(self, event)
+
+
+class BrandLogo(QtWidgets.QWidget):
+    """The maxpkg mark without a tile: the logo filled with a vertical accent gradient (lighter at the top) over
+    a soft radial glow. Colors are read from the Manager theme at paint time, so theme changes apply at once."""
+
+    def __init__(self, themes, size=40, glyph=30, parent=None):
+        QtWidgets.QWidget.__init__(self, parent)
+        self.themes = themes
+        self.glyph = glyph
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)  # drags on the brand still move the window
+
+    def paintEvent(self, _event):
+        theme = self.themes.manager
+        accent, light = theme.color("accent"), theme.color("accentHover")
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        center = QtCore.QPointF(self.width() / 2.0, self.height() / 2.0)
+        glow = QtGui.QRadialGradient(center, self.width() / 2.0)
+        for stop, alpha in ((0.0, 0.30), (0.55, 0.12), (1.0, 0.0)):
+            color = QtGui.QColor(accent)
+            color.setAlphaF(alpha)
+            glow.setColorAt(stop, color)
+        painter.fillRect(self.rect(), QtGui.QBrush(glow))
+        dpr = self.devicePixelRatioF()
+        mark = QtGui.QImage(icons.pixmap("maxpkg-logo", QtGui.QColor("#ffffff"), self.glyph, dpr).toImage())
+        mark.setDevicePixelRatio(dpr)
+        tint = QtGui.QPainter(mark)
+        tint.setCompositionMode(QtGui.QPainter.CompositionMode_SourceIn)
+        fill = QtGui.QLinearGradient(0, 0, 0, self.glyph)
+        fill.setColorAt(0.0, light)
+        fill.setColorAt(1.0, accent)
+        tint.fillRect(QtCore.QRectF(0, 0, self.glyph, self.glyph), QtGui.QBrush(fill))
+        tint.end()
+        offset = (self.width() - self.glyph) / 2.0
+        painter.drawImage(QtCore.QPointF(offset, offset), mark)
+        painter.end()
+
+
+class EdgeFade(QtWidgets.QWidget):
+    """Soft edge of a scroll area: the window's own background drawn over the content with an alpha ramp, so the
+    content fades out instead of being cut off. Top edge only once scrolled, bottom edge while more is below.
+
+    The brush comes from the top-level window's `background_brush()` (window coordinates); without it the
+    palette window color is used.
+    """
+
+    SIZE = 28
+
+    def __init__(self, area, edge="top"):
+        QtWidgets.QWidget.__init__(self, area.viewport())
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.area = area
+        self.edge = edge
+        bar = area.verticalScrollBar()
+        bar.valueChanged.connect(self._follow)
+        bar.rangeChanged.connect(lambda _low, _high: self._follow())
+        area.viewport().installEventFilter(self)
+        self._follow()
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QtCore.QEvent.Resize, QtCore.QEvent.Show):
+            self._follow()
+        return False
+
+    def _follow(self):
+        viewport = self.area.viewport()
+        bar = self.area.verticalScrollBar()
+        needed = bar.value() > bar.minimum() if self.edge == "top" else bar.value() < bar.maximum()
+        top = 0 if self.edge == "top" else viewport.height() - self.SIZE
+        self.setGeometry(0, top, viewport.width(), self.SIZE)
+        self.setVisible(needed)
+        if needed:
+            self.raise_()
+            self.update()
+
+    def paintEvent(self, _event):
+        window = self.window()
+        dpr = self.devicePixelRatioF()
+        image = QtGui.QImage(int(self.width() * dpr), int(self.height() * dpr), QtGui.QImage.Format_ARGB32_Premultiplied)
+        image.setDevicePixelRatio(dpr)
+        image.fill(Qt.transparent)
+        painter = QtGui.QPainter(image)
+        origin = self.mapTo(window, QtCore.QPoint(0, 0))
+        painter.translate(-origin.x(), -origin.y())
+        brush = window.background_brush() if hasattr(window, "background_brush") else self.palette().window()
+        painter.fillRect(QtCore.QRect(origin, self.size()), brush)
+        painter.resetTransform()
+        painter.setCompositionMode(QtGui.QPainter.CompositionMode_DestinationIn)
+        ramp = QtGui.QLinearGradient(0, 0, 0, self.height())
+        solid, clear = (0.0, 1.0) if self.edge == "top" else (1.0, 0.0)
+        ramp.setColorAt(solid, QtGui.QColor(0, 0, 0, 255))
+        ramp.setColorAt(clear, QtGui.QColor(0, 0, 0, 0))
+        painter.fillRect(QtCore.QRectF(0, 0, self.width(), self.height()), QtGui.QBrush(ramp))
+        painter.end()
+        target = QtGui.QPainter(self)
+        target.drawImage(0, 0, image)
+        target.end()
+
+
+class Shimmer(QtWidgets.QWidget):
+    """A light diagonal band that sweeps across `target` every few seconds to draw the eye (same as TerraScoop's
+    Show Layers button). Painted over the button, clipped to its rounded corners; mouse events pass through."""
+
+    SWEEP_MS = 900
+    PAUSE_MS = 2600
+    SLANT = 0.45  # the band leans this much (horizontal per vertical)
+
+    def __init__(self, target, radius=10):
+        QtWidgets.QWidget.__init__(self, target)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.radius = radius
+        self._clock = QtCore.QElapsedTimer()
+        self._clock.start()
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._tick)
+        target.installEventFilter(self)
+        self._follow()
+
+    def _tick(self):
+        """Frames only while the band sweeps; in the pause one wake-up for the next sweep (many cards share it)."""
+        self.update()
+        elapsed = self._clock.elapsed() % (self.SWEEP_MS + self.PAUSE_MS)
+        self._timer.setInterval(33 if elapsed < self.SWEEP_MS else self.SWEEP_MS + self.PAUSE_MS - elapsed)
+
+    def _follow(self):
+        target = self.parentWidget()
+        if target is not None and target.isVisible():
+            self.setGeometry(target.rect())
+            self.raise_()
+            self.show()
+            self._timer.start()
+        else:
+            self._timer.stop()
+            self.hide()
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QtCore.QEvent.Show, QtCore.QEvent.Hide, QtCore.QEvent.Resize):
+            self._follow()
+        return False
+
+    def phase(self):
+        """0..1 while the band sweeps, None in the pause."""
+        elapsed = self._clock.elapsed() % (self.SWEEP_MS + self.PAUSE_MS)
+        return elapsed / float(self.SWEEP_MS) if elapsed < self.SWEEP_MS else None
+
+    def paintEvent(self, _event):
+        progress = self.phase()
+        if progress is None:
+            return
+        progress = progress * progress * (3.0 - 2.0 * progress)  # ease in and out
+        width, height = float(self.width()), float(self.height())
+        band = max(28.0, width * 0.35)
+        x = -band - self.SLANT * height + progress * (width + 2.0 * band + 2.0 * self.SLANT * height)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        clip = QtGui.QPainterPath()
+        clip.addRoundedRect(QtCore.QRectF(self.rect()), self.radius, self.radius)
+        painter.setClipPath(clip)
+        # Across the band (perpendicular to its slant): clear, a soft light middle, clear.
+        gradient = QtGui.QLinearGradient(x - band / 2.0, 0.0, x + band / 2.0, self.SLANT * band)
+        for stop, alpha in ((0.0, 0), (0.42, 46), (0.5, 80), (0.58, 46), (1.0, 0)):
+            gradient.setColorAt(stop, QtGui.QColor(255, 255, 255, alpha))
+        painter.fillRect(self.rect(), QtGui.QBrush(gradient))
+        painter.end()
 
 
 class ResponsiveGrid(QtWidgets.QWidget):
@@ -522,6 +974,32 @@ class FlowRow(QtWidgets.QWidget):
     def showEvent(self, event):
         QtWidgets.QWidget.showEvent(self, event)
         self._relayout(self.width())
+
+
+def paint_check(painter, rect, checked, hovered, theme, radio=False, dpr=1.0):
+    """The one checkbox/radio look of the Manager: accent fill with a dark Lucide check (or dot) when checked,
+    a soft outline otherwise. `rect` is a QRectF square (16-22 px)."""
+    painter.save()
+    painter.setRenderHint(QtGui.QPainter.Antialiasing)
+    accent = theme.color("accent")
+    radius = rect.width() / 2.0 if radio else max(3.0, rect.width() * 0.25)
+    if checked:
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(theme.color("accentHover") if hovered else accent)
+        painter.drawRoundedRect(rect, radius, radius)
+        if radio:
+            painter.setBrush(theme.color("backgroundWindow"))
+            inner = rect.width() * 0.36
+            painter.drawEllipse(rect.center(), inner / 2.0, inner / 2.0)
+        else:
+            size = int(round(rect.width() * 0.72))
+            mark = icons.pixmap("check", theme.color("backgroundWindow"), size, dpr)
+            painter.drawPixmap(QtCore.QPointF(rect.center().x() - size / 2.0, rect.center().y() - size / 2.0), mark)
+    else:
+        painter.setPen(QtGui.QPen(theme.color("textDisabled" if hovered else "borderStrong"), 1.5))
+        painter.setBrush(theme.color("surfaceHover") if hovered else Qt.NoBrush)
+        painter.drawRoundedRect(rect.adjusted(0.75, 0.75, -0.75, -0.75), radius, radius)
+    painter.restore()
 
 
 def themed_menu(parent):
