@@ -236,10 +236,18 @@ class Runtime(QtCore.QObject):
         package = self.package(reference)
         return package is not None and max_api.open_folder(package.install_path)
 
+    def site_url(self, path=""):
+        """The maxpkg.dev site of the configured service (a development endpoint keeps its own site)."""
+        origin = re.match(r"^(https?://[^/]+)", self.settings.effective_endpoint)
+        return (origin.group(1) if origin else "https://maxpkg.dev") + path
+
+    def open_catalog(self):
+        """The website's catalog in the browser."""
+        return max_api.open_url(self.site_url("/catalog"))
+
     def link_url(self, package, kind):
         if kind == "maxpkg":
-            origin = re.match(r"^(https?://[^/]+)", self.settings.effective_endpoint)
-            return (origin.group(1) if origin else "https://maxpkg.dev") + "/packages/" + (package.slug or package.guid)
+            return self.site_url("/packages/" + (package.slug or package.guid))
         return {"homepage": package.homepage_url, "documentation": package.documentation_url,
                 "support": package.support_url, "purchase": package.purchase_url,
                 "license": package.license_url}.get(kind, "")

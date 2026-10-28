@@ -12,7 +12,7 @@ from ..qt_compat import (QAction, QtCore, QtGui, QtWidgets, Qt, Signal, event_gl
 from . import icons
 from .dialogs import confirm
 from .frame import apply_native_frame, native_event
-from .widgets import add_action, add_danger_action, themed_menu
+from .widgets import add_action, add_danger_action, add_menu_title, themed_menu
 
 AREAS = {"top": Qt.TopToolBarArea, "bottom": Qt.BottomToolBarArea, "left": Qt.LeftToolBarArea,
          "right": Qt.RightToolBarArea}
@@ -544,13 +544,15 @@ def clamp_to_screen(point, size):
 class ToolbarController(QtCore.QObject):
     """Owns the toolbar for one Runtime lifecycle. `stop()` removes it from the Max window."""
 
-    def __init__(self, runtime, themes, images, open_manager, open_details, parent=None):
+    def __init__(self, runtime, themes, images, open_manager, open_details, feedback=None, parent=None):
+        """`feedback(text, kind, action)` reports what a toolbar action did (a toast)."""
         QtCore.QObject.__init__(self, parent)
         self.runtime = runtime
         self.themes = themes
         self.images = images
         self.open_manager = open_manager
         self.open_details = open_details
+        self.feedback = feedback or (lambda text, kind="success", action=None: None)
         self.main_window = max_main_window()
         self.toolbar = None
         self.floating = None
@@ -831,9 +833,11 @@ class ToolbarController(QtCore.QObject):
                     current = order.index(button)
                     order.pop(current)
                     order.insert(target - 1 if target > current else target, button)
-                    self.runtime.set_toolbar_order([widget.item.guid for widget in order])
+                    if self.runtime.set_toolbar_order([widget.item.guid for widget in order]):
+                        self.feedback("Moved {}.".format(self._entry_name(button.item.guid)))
             elif target:
-                self.runtime.set_toolbar_order([widget.item.guid for widget in strip.buttons])
+                if self.runtime.set_toolbar_order([widget.item.guid for widget in strip.buttons]):
+                    self.feedback("Moved {}.".format(self._entry_name(button.item.guid)))
             return
         target = strip.index_at(global_point)
         current = strip.buttons.index(button)
@@ -860,6 +864,16 @@ class ToolbarController(QtCore.QObject):
             return
         menu = themed_menu(None)
         menu.setStyleSheet(self.themes.qss())
+        byline = "v" + package.version + (" · " + package.developer if package.developer else "")
+        link = None
+        purchase = package.purchase_label() if package.purchase_url else ""
+        if package.purchase_url:  # the header opens the author's Donate (or purchase) page
+            link = lambda: self._open_purchase(guid)  # noqa: E731
+        heart = purchase.lower() in ("donate", "support", "sponsor")
+        add_menu_title(menu, package.display_name, self.themes,
+                       pixmap=self.images.get(package.icon_file or package.icon_url), icon_name="package",
+                       subtitle=byline, on_click=link, link_icon="heart" if heart else "shopping-cart",
+                       link_tip="{}: opens the author's page in your browser".format(purchase or "Donate"))
         add_action(menu, "Run", lambda: self.runtime.run(guid), self.themes, "play")
         add_action(menu, "Details", lambda: self.open_details(guid), self.themes, "info")
         if package.update_available:
@@ -876,10 +890,10 @@ class ToolbarController(QtCore.QObject):
         move_next = add_action(menu, "Move Down" if self.strip.style_info.vertical else "Move Right",
                                lambda: self._move(guid, 1), self.themes, "arrow-right")
         move_next.setEnabled(unlocked and index < len(self.strip.buttons) - 1)
-        add_action(menu, "Add Divider", lambda: self.runtime.add_toolbar_divider(guid), self.themes,
+        add_action(menu, "Add Divider", lambda: self._add_divider(guid), self.themes,
                    "separator-vertical" if not self.strip.style_info.vertical else "separator-horizontal"
                    ).setEnabled(unlocked)
-        add_action(menu, "Hide from Toolbar", lambda: self.runtime.set_toolbar_visible(guid, False), self.themes,
+        add_action(menu, "Hide from Toolbar", lambda: self._hide_package(guid), self.themes,
                    "eye-off").setEnabled(unlocked)
         menu.addSeparator()
         self._add_lock_action(menu)
@@ -902,6 +916,9 @@ class ToolbarController(QtCore.QObject):
     def _brand_menu(self):
         menu = themed_menu(None)
         menu.setStyleSheet(self.themes.qss())
+        add_menu_title(menu, "MaxPkg Toolbar", self.themes, icon_name="maxpkg-logo",
+                       subtitle="Package Manager " + self.runtime.version, on_click=self._open_catalog,
+                       link_icon="external-link", link_tip="Opens the maxpkg.dev catalog in your browser")
         add_action(menu, "Open Manager", lambda: self.open_manager(""), self.themes, "package")
         add_action(menu, "Check Updates", lambda: self.runtime.check_updates(True), self.themes, "refresh-cw")
         add_action(menu, "Toolbar settings...", lambda: self.open_manager("settings:toolbar"), self.themes, "settings")
@@ -921,18 +938,28 @@ class ToolbarController(QtCore.QObject):
     def _add_lock_action(self, menu):
         """Lock Toolbar / Unlock Toolbar: a locked toolbar keeps every button and divider in its place."""
         locked = self.runtime.settings.toolbar_locked
-        add_action(menu, "Unlock Toolbar" if locked else "Lock Toolbar",
-                   lambda: self.runtime.set_toolbar_locked(not locked), self.themes,
-                   "lock-open" if locked else "lock")
+        add_action(menu, "Unlock Toolbar" if locked else "Lock Toolbar", lambda: self._set_locked(not locked),
+                   self.themes, "lock-open" if locked else "lock")
+
+    POSITION_NAMES = {"top": "the top", "bottom": "the bottom", "left": "the left side", "right": "the right side",
+                      "floatinghorizontal": "a floating horizontal bar",
+                      "floatingvertical": "a floating vertical bar"}
 
     def set_position(self, position):
         self.runtime.settings.toolbar_dock_position = position
-        self.runtime.save_settings("toolbar")
+        if self.runtime.save_settings("toolbar"):
+            self.feedback("The toolbar is now {}.".format(self.POSITION_NAMES.get(position, position)))
 
     def _hide_toolbar(self):
         self.runtime.settings.toolbar_visible = False
         self.runtime.save_settings("toolbar")
-        self.runtime.notify.emit("The toolbar is hidden. Turn it on again in Settings > Toolbar.", "info")
+        self.feedback("The toolbar is hidden.\nTurn it on again in Settings > Toolbar.", "info",
+                      action=("Show Toolbar", "eye", self._show_toolbar))
+
+    def _show_toolbar(self):
+        self.runtime.settings.toolbar_visible = True
+        if self.runtime.save_settings("toolbar"):
+            self.feedback("The toolbar is shown again.")
 
     def _move(self, guid, delta):
         self._move_index([button.item.guid for button in self.strip.buttons].index(guid), delta)
@@ -941,8 +968,55 @@ class ToolbarController(QtCore.QObject):
         """Move the entry at `index` of the toolbar line (a button or a divider) by one place."""
         order = [widget.item.guid for widget in self.strip.buttons]
         target = max(0, min(len(order) - 1, index + delta))
-        order.insert(target, order.pop(index))
-        self.runtime.set_toolbar_order(order)
+        entry = order.pop(index)
+        order.insert(target, entry)
+        if self.runtime.set_toolbar_order(order):
+            vertical = self.strip.style_info.vertical
+            direction = ("up" if vertical else "left") if delta < 0 else ("down" if vertical else "right")
+            self.feedback("Moved {} {}.".format(self._entry_name(entry), direction))
+
+    def _entry_name(self, entry):
+        """How a toolbar entry is called in messages: the script's name, or "the divider"."""
+        if is_divider(entry):
+            return "the divider"
+        package = self.runtime.package(entry)
+        return package.display_name if package is not None else "the button"
+
+    def _open_catalog(self):
+        if self.runtime.open_catalog():
+            self.feedback("Opened the maxpkg.dev catalog in your browser.")
+
+    def _open_purchase(self, guid):
+        package = self.runtime.package(guid)
+        if package is not None and self.runtime.open_link(package, "purchase"):
+            self.feedback("Opened the {} page of {} in your browser.\nThank you for supporting the author.".format(
+                package.purchase_label(), package.display_name))
+
+    def _add_divider(self, guid):
+        if self.runtime.add_toolbar_divider(guid):
+            self.feedback("Added a divider after {}.".format(self._entry_name(guid)))
+
+    def _remove_divider(self, ordinal):
+        if self.runtime.remove_toolbar_divider(ordinal):
+            self.feedback("Removed the divider.")
+
+    def _hide_package(self, guid):
+        name = self._entry_name(guid)
+        if self.runtime.set_toolbar_visible(guid, False):
+            self.feedback("{} is hidden from the toolbar.\nIt stays installed; show it again any time.".format(name),
+                          "info", action=("Show", "eye", lambda: self._show_package(guid)))
+
+    def _show_package(self, guid):
+        if self.runtime.set_toolbar_visible(guid, True):
+            self.feedback("{} is back on the toolbar.".format(self._entry_name(guid)))
+
+    def _set_locked(self, locked):
+        if self.runtime.set_toolbar_locked(locked):
+            if locked:
+                self.feedback("The toolbar is locked.\nButtons and dividers keep their places.", "info",
+                              action=("Unlock", "lock-open", lambda: self._set_locked(False)))
+            else:
+                self.feedback("The toolbar is unlocked.\nHold Alt and drag to arrange its buttons.")
 
     def _divider_menu(self, divider):
         if divider not in self.strip.buttons:
@@ -953,6 +1027,9 @@ class ToolbarController(QtCore.QObject):
         unlocked = not self.runtime.settings.toolbar_locked
         menu = themed_menu(None)
         menu.setStyleSheet(self.themes.qss())
+        add_menu_title(menu, "Divider", self.themes,
+                       icon_name="separator-horizontal" if vertical else "separator-vertical",
+                       subtitle="Toolbar divider")
         move_back = add_action(menu, "Move Up" if vertical else "Move Left", lambda: self._move_index(index, -1),
                                self.themes, "arrow-left")
         move_back.setEnabled(unlocked and index > 0)
@@ -963,8 +1040,8 @@ class ToolbarController(QtCore.QObject):
         self._add_lock_action(menu)
         add_action(menu, "Toolbar settings...", lambda: self.open_manager("settings:toolbar"), self.themes, "settings")
         menu.addSeparator()
-        add_danger_action(menu, "Remove Divider", lambda: self.runtime.remove_toolbar_divider(ordinal), self.themes,
-                          "x", enabled=unlocked)
+        add_danger_action(menu, "Remove Divider", lambda: self._remove_divider(ordinal), self.themes, "x",
+                          enabled=unlocked)
         exec_menu(menu, QtGui.QCursor.pos())
         menu.deleteLater()
 

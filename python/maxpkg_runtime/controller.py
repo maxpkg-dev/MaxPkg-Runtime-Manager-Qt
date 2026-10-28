@@ -1,4 +1,4 @@
-"""Lifecycle owner of one Runtime instance: services, toolbar, Manager window, tray messages.
+"""Lifecycle owner of one Runtime instance: services, toolbar, Manager window, screen toasts.
 
 Created passively by bootstrap.py; `start()` acquires everything, `stop()` releases it in reverse
 order and is safe to call twice or after a partial start. Closing the Manager window only
@@ -9,11 +9,11 @@ import os
 
 from . import qt_compat
 from .domain.ini import IniDocument
-from .qt_compat import QtCore, QtWidgets, is_valid
+from .qt_compat import QtCore, QtGui, QtWidgets, is_valid, screen_at
 from .services import log, max_api
 from .services.images import ImageService
 from .services.runtime import Runtime
-from .ui.manager_window import ManagerWindow
+from .ui.manager_window import ManagerWindow, Toast
 from .ui.theme import ThemeService
 from .ui.toolbar import ToolbarController
 from .ui.welcome import WelcomeWindow
@@ -41,9 +41,9 @@ class Controller:
         self.toolbar = None
         self.window = None
         self.welcome = None
-        self.tray = None
         self._timers = []
         self._close_pending = False
+        self._screen_toasts = []  # bottom-right toasts while the Manager is closed
 
     # ----------------------------------------------------------------- lifecycle
     def start(self, open_manager=True, welcome=False, from_startup=False):
@@ -72,7 +72,7 @@ class Controller:
         self.runtime.notify.connect(self._notify_outside)
         self.runtime.settings_changed.connect(self._on_settings)
         self.toolbar = ToolbarController(self.runtime, self.themes, self.images, self.open_manager,
-                                         self.open_details)
+                                         self.open_details, self.feedback)
         self.toolbar.start()
         self.running = True
         if settings.auto_check_packages and self.runtime.automatic_check_due():
@@ -108,6 +108,11 @@ class Controller:
                 timer.stop()
                 timer.deleteLater()
         self._timers = []
+        for toast in self._screen_toasts:
+            if is_valid(toast):
+                toast.hide()
+                toast.deleteLater()
+        self._screen_toasts = []
         self._destroy_window()
         if is_valid(self.welcome):
             self.welcome.hide()
@@ -126,15 +131,12 @@ class Controller:
             self.runtime.stop()
         if self.images is not None:
             self.images.stop()
-        if is_valid(self.tray):
-            self.tray.hide()
-            self.tray.deleteLater()
         if self.themes is not None:
             self.themes.unbind_all()
         for owned in (self.images, self.runtime, self.themes):
             if is_valid(owned):
                 owned.deleteLater()
-        self.toolbar = self.images = self.runtime = self.themes = self.tray = None
+        self.toolbar = self.images = self.runtime = self.themes = None
         self.stopped = True
         log.info("shutdown", "Runtime stopped")
 
@@ -241,22 +243,61 @@ class Controller:
         log.warning("facade", "Unknown MaxPkg call: " + command)
         return False
 
+    # ----------------------------------------------------------------- feedback toasts
+    SCREEN_TOAST_MARGIN = 16
+    SCREEN_TOAST_GAP = 8
+    SCREEN_TOAST_LIMIT = 4  # older ones close when more arrive
+
+    def _manager_showing(self):
+        window = self.window
+        return (is_valid(window) and window.isVisible() and not window.isMinimized()
+                and not window.chrome.collapsed)
+
+    def feedback(self, text, kind="success", action=None):
+        """What an action did, as a toast: in the Manager when it is open, else in the screen corner."""
+        if self._manager_showing():
+            self.window.notify(text, kind, action=action)
+            return
+        self.screen_toast(text, kind, action)
+
+    def screen_toast(self, text, kind="info", action=None):
+        """A toast in the bottom-right corner of 3ds Max's screen, above the taskbar, like a Windows notification.
+        New toasts arrive at the bottom and push older ones up."""
+        alive = [toast for toast in self._screen_toasts if is_valid(toast) and toast.isVisible()]
+        while len(alive) >= self.SCREEN_TOAST_LIMIT:
+            oldest = alive.pop(0)
+            oldest.hide()
+            oldest.deleteLater()
+        toast = Toast(text, kind, self.themes, None, action=action)
+        toast.expired.connect(self._place_screen_toasts)
+        toast.adjustSize()
+        toast.show()
+        self._screen_toasts = alive + [toast]
+        self._place_screen_toasts()
+
+    def _place_screen_toasts(self):
+        self._screen_toasts = [toast for toast in self._screen_toasts if is_valid(toast) and toast.isVisible()]
+        if not self._screen_toasts:
+            return
+        # The monitor that holds 3ds Max's main window (not the pointer's): its work area ends above the taskbar.
+        anchor = qt_compat.max_main_window()
+        center = anchor.frameGeometry().center() if is_valid(anchor) else QtGui.QCursor.pos()
+        area = screen_at(center).availableGeometry()
+        bottom = area.bottom() - self.SCREEN_TOAST_MARGIN
+        for toast in reversed(self._screen_toasts):  # the newest sits lowest
+            toast.adjustSize()
+            point = QtCore.QPoint(area.right() - self.SCREEN_TOAST_MARGIN - toast.width(), bottom - toast.height())
+            toast.place(point)
+            bottom = point.y() - self.SCREEN_TOAST_GAP
+
     # ----------------------------------------------------------------- messages
     def _notify_outside(self, text, kind):
-        """When the Manager is closed, show Runtime messages as a Windows notification instead."""
-        if is_valid(self.window) and self.window.isVisible():
+        """With the Manager closed, Runtime messages (installs, updates, errors) appear as screen toasts."""
+        if self._manager_showing():
             return
         if not self.runtime.settings.notifications and kind != "error":
             return
-        if not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
-            return
-        if self.tray is None:
-            self.tray = QtWidgets.QSystemTrayIcon(QtWidgets.QApplication.windowIcon())
-            self.tray.setToolTip("MaxPkg")
-        self.tray.show()
-        icon = {"error": QtWidgets.QSystemTrayIcon.Critical, "warning": QtWidgets.QSystemTrayIcon.Warning}.get(
-            kind, QtWidgets.QSystemTrayIcon.Information)
-        self.tray.showMessage("MaxPkg", text, icon, 5000)
+        self.screen_toast(text, kind)
 
     def _on_settings(self, area):
         if area == "developer":

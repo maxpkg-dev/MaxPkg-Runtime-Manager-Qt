@@ -1,7 +1,7 @@
 """Package cards: compact/full installed cards and full Discover cards (HTML Manager layout)."""
 
 from ..domain.packages import compact_number
-from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal
+from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal, is_valid
 from ..services.images import rounded
 from .widgets import Badge, Button, ElidedLabel, ElidedText, FlowRow, IconButton, IconLabel, hbox, label, vbox
 
@@ -91,7 +91,7 @@ class InstalledCard(_CardBase):
         _CardBase.__init__(self, package, host, parent)
         themes = host.themes
         on_toolbar = host.runtime.is_on_toolbar(package)
-        self.setToolTip("" if not sortable else "Drag the handle to change the Toolbar order")
+        self.setToolTip("" if not sortable else "Click to open details, drag to change the toolbar order")
         layout = vbox(spacing=0, margins=(14, 14, 12, 12))
         layout.addLayout(self._heading(show_hidden=not on_toolbar))
         if full:
@@ -122,6 +122,8 @@ class InstalledCard(_CardBase):
         layout.addLayout(actions)
         self.setLayout(layout)
         self.setMinimumHeight(FULL_CARD_HEIGHT - 70 if full else COMPACT_CARD_HEIGHT)
+        self.sortable = sortable
+        self._press_point = None
         self.handle = None
         if sortable:
             self.handle = DragHandle(self, themes)
@@ -130,6 +132,24 @@ class InstalledCard(_CardBase):
         _CardBase.resizeEvent(self, event)
         if self.handle is not None:
             self.handle.move(self.width() - 32, 8)
+
+    # The whole card drags when the list is in toolbar order; a click without moving still opens Details.
+    def mousePressEvent(self, event):
+        self._press_point = event.pos() if self.sortable and event.button() == Qt.LeftButton else None
+        _CardBase.mousePressEvent(self, event)
+
+    def mouseMoveEvent(self, event):
+        point = self._press_point
+        if point is not None and (event.pos() - point).manhattanLength() >= CARD_DRAG_DISTANCE:
+            self._press_point = None
+            self._pressed = False  # the release after a drag must not open Details
+            start_card_drag(self, point)
+            return
+        _CardBase.mouseMoveEvent(self, event)
+
+    def mouseReleaseEvent(self, event):
+        self._press_point = None
+        _CardBase.mouseReleaseEvent(self, event)
 
 
 class DragHandle(QtWidgets.QLabel):
@@ -152,26 +172,37 @@ class DragHandle(QtWidgets.QLabel):
     def mouseMoveEvent(self, event):
         if self._press is None or (event.pos() - self._press).manhattanLength() < 4:
             return
-        self._press = None
-        host = self.card.host
-        if host.runtime.settings.toolbar_locked:  # a locked toolbar keeps its order: say so instead
-            if hasattr(host, "notify_toolbar_locked"):
-                host.notify_toolbar_locked()
-            return
-        drag = QtGui.QDrag(self)
-        data = QtCore.QMimeData()
-        data.setData(DRAG_MIME, self.card.package.guid.encode("utf-8"))
-        drag.setMimeData(data)
-        snapshot = self.card.grab()
-        dpr = self.devicePixelRatioF()
-        scaled = snapshot.scaledToWidth(int(min(snapshot.width(), 260 * dpr)), Qt.SmoothTransformation)
-        drag.setPixmap(scaled)
-        drag.setHotSpot(QtCore.QPoint(20, 20))
-        self.card.setProperty("dragging", "true")
-        drag.exec_(Qt.MoveAction) if hasattr(drag, "exec_") else drag.exec(Qt.MoveAction)
+        press, self._press = self._press, None
+        start_card_drag(self.card, self.mapTo(self.card, press))
 
     def mouseReleaseEvent(self, event):
         self._press = None
+
+
+CARD_DRAG_DISTANCE = 6  # px a press on the card moves before it becomes a drag instead of a click
+
+
+def start_card_drag(card, grab_point):
+    """Drag `card` to change the toolbar order; `grab_point` (card coordinates) stays under the pointer."""
+    host = card.host
+    if host.runtime.settings.toolbar_locked:  # a locked toolbar keeps its order: say so instead
+        if hasattr(host, "notify_toolbar_locked"):
+            host.notify_toolbar_locked()
+        return
+    drag = QtGui.QDrag(card)
+    data = QtCore.QMimeData()
+    data.setData(DRAG_MIME, card.package.guid.encode("utf-8"))
+    drag.setMimeData(data)
+    snapshot = card.grab()
+    dpr = card.devicePixelRatioF()
+    scaled = snapshot.scaledToWidth(int(min(snapshot.width(), 260 * dpr)), Qt.SmoothTransformation)
+    scale = scaled.width() / float(snapshot.width()) if snapshot.width() else 1.0
+    drag.setPixmap(scaled)
+    drag.setHotSpot(QtCore.QPoint(int(grab_point.x() * scale), int(grab_point.y() * scale)))
+    card.setProperty("dragging", "true")
+    drag.exec_(Qt.MoveAction) if hasattr(drag, "exec_") else drag.exec(Qt.MoveAction)
+    if is_valid(card):
+        card.setProperty("dragging", "false")
 
 
 class RemoteCard(_CardBase):

@@ -1062,6 +1062,118 @@ class _DangerRow(QtWidgets.QWidget):
         painter.end()
 
 
+class _MenuTitle(QtWidgets.QWidget):
+    """The header of a context menu: what was clicked (a script with its icon, a divider, the toolbar) on its own
+    darker band, with a bold name and a muted line under it, so it never reads as a menu item."""
+
+    ICON = 22
+    HEIGHT = 46
+
+    triggered = Signal()
+
+    def __init__(self, text, themes, pixmap=None, icon_name="", subtitle="", link_icon="", link_tip="", parent=None):
+        """`link_icon`: the header is clickable (e.g. the author's Donate page) and shows this icon on the right."""
+        QtWidgets.QWidget.__init__(self, parent)
+        self.text = text
+        self.subtitle = subtitle
+        self.themes = themes
+        self.pixmap = pixmap
+        self.icon_name = icon_name
+        self.link_icon = link_icon
+        if link_icon:
+            self.setAttribute(Qt.WA_Hover)
+            self.setCursor(Qt.PointingHandCursor)
+            self.setToolTip(link_tip)
+        self.title_font = QtGui.QFont(self.font())
+        self.title_font.setBold(True)
+        self.title_font.setPixelSize(13)
+        self.sub_font = QtGui.QFont(self.font())
+        self.sub_font.setPixelSize(11)
+        self.setMinimumWidth(150)
+        self.setFixedHeight(self.HEIGHT)
+
+    def sizeHint(self):
+        width = max(QtGui.QFontMetrics(self.title_font).horizontalAdvance(self.text),
+                    QtGui.QFontMetrics(self.sub_font).horizontalAdvance(self.subtitle))
+        return QtCore.QSize(_DangerRow.TEXT_X + 4 + width + 14 + (24 if self.link_icon else 0), self.HEIGHT)
+
+    def event(self, event):
+        if self.link_icon and event.type() in (QtCore.QEvent.HoverEnter, QtCore.QEvent.HoverLeave):
+            self.update()
+        return QtWidgets.QWidget.event(self, event)
+
+    def mouseReleaseEvent(self, event):
+        if self.link_icon and event.button() == Qt.LeftButton and self.rect().contains(event_pos(event)):
+            self.triggered.emit()
+
+    def paintEvent(self, _event):
+        theme = self.themes.manager
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        band = QtCore.QRectF(self.rect()).adjusted(0, 0, 0, -2)
+        hovered = bool(self.link_icon) and self.underMouse()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(theme.color("surfaceHover"))  # a lighter band than the items: clearly the header
+        painter.drawRoundedRect(band, 7, 7)
+        # Donate / purchase links hover in the green of the Donate buttons, other links (the site) in the accent.
+        support = self.link_icon in ("heart", "shopping-cart")
+        if hovered:
+            painter.setBrush(theme.color("successSurface" if support else "accentActive"))
+            painter.setPen(QtGui.QPen(theme.color("successBorder" if support else "borderFocus"), 1))
+            painter.drawRoundedRect(band.adjusted(0.5, 0.5, -0.5, -0.5), 7, 7)
+            painter.setPen(Qt.NoPen)
+        if self.link_icon:
+            glyph = icons.pixmap(self.link_icon, theme.color("iconSuccess" if support else "iconAccent"), 14,
+                                 self.devicePixelRatioF())
+            painter.drawPixmap(QtCore.QPointF(band.right() - 24, (band.height() - 14) / 2.0), glyph)
+        icon_rect = QtCore.QRectF(_DangerRow.ICON_X - 3, (band.height() - self.ICON) / 2.0, self.ICON, self.ICON)
+        if self.pixmap is not None and not self.pixmap.isNull():
+            clip = QtGui.QPainterPath()
+            clip.addRoundedRect(icon_rect, 5, 5)
+            painter.setClipPath(clip)
+            painter.drawPixmap(icon_rect, self.pixmap, QtCore.QRectF(self.pixmap.rect()))
+            painter.setClipping(False)
+        elif self.icon_name:
+            glyph = icons.pixmap(self.icon_name, theme.color("iconAccent"), self.ICON, self.devicePixelRatioF())
+            painter.drawPixmap(icon_rect.topLeft(), glyph)
+        left = _DangerRow.TEXT_X + 4
+        width = self.width() - left - 10 - (24 if self.link_icon else 0)
+        title_metrics = QtGui.QFontMetrics(self.title_font)
+        if self.subtitle:
+            title_top = band.height() / 2.0 - title_metrics.height() + 2
+            sub_top = band.height() / 2.0 + 1
+        else:
+            title_top = (band.height() - title_metrics.height()) / 2.0
+        painter.setFont(self.title_font)
+        painter.setPen(theme.color("textStrong"))
+        painter.drawText(QtCore.QRectF(left, title_top, width, title_metrics.height()), int(Qt.AlignLeft | Qt.AlignVCenter),
+                         title_metrics.elidedText(self.text, Qt.ElideRight, int(width)))
+        if self.subtitle:
+            sub_metrics = QtGui.QFontMetrics(self.sub_font)
+            painter.setFont(self.sub_font)
+            painter.setPen(theme.color("textMuted"))
+            painter.drawText(QtCore.QRectF(left, sub_top, width, sub_metrics.height()), int(Qt.AlignLeft | Qt.AlignVCenter),
+                             sub_metrics.elidedText(self.subtitle, Qt.ElideRight, int(width)))
+        painter.end()
+
+
+def add_menu_title(menu, text, themes, pixmap=None, icon_name="", subtitle="", on_click=None, link_icon="heart",
+                   link_tip=""):
+    """The menu's header (what was clicked), then a separator. With `on_click` it is a link (the menu closes
+    first): hover, a pointing hand and `link_icon` on the right; without it the header is not clickable."""
+    title = _MenuTitle(text, themes, pixmap, icon_name, subtitle, link_icon if on_click else "", link_tip)
+    action = QtWidgets.QWidgetAction(menu)
+    action.setDefaultWidget(title)
+    action.setEnabled(on_click is not None)
+    if on_click is not None:
+        title.triggered.connect(menu.close)
+        title.triggered.connect(lambda: QtCore.QTimer.singleShot(0, on_click))
+    menu.addAction(action)
+    menu.addSeparator()
+    return action
+
+
 def add_danger_action(menu, text, callback, themes, icon_name="trash-2", enabled=True):
     """A red destructive item at the end of a themed menu; the menu closes before `callback` runs."""
     row = _DangerRow(text, icon_name, themes)

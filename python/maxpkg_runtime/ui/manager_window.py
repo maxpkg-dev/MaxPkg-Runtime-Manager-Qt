@@ -60,6 +60,8 @@ class Toast(QtWidgets.QFrame):
     button and a thin bar that shows the time left (it waits while the pointer is over the toast). It slides in
     from the right. A click anywhere closes it."""
 
+    expired = Signal()  # it closed; screen toasts re-stack on it
+
     STATES = {"success": ("done", "success"), "error": ("error", "danger"), "warning": ("warning", "warning")}
     LIFETIME_MS = {"error": 8000, "warning": 6500}
     DEFAULT_LIFETIME_MS = 5200
@@ -67,8 +69,14 @@ class Toast(QtWidgets.QFrame):
     RADIUS = 14
 
     def __init__(self, text, kind, themes, parent, action=None, key=""):
+        """`parent` None: a small window of its own (the screen corner toasts while the Manager is closed)."""
         QtWidgets.QFrame.__init__(self, parent)
         self.setObjectName("Toast")
+        if parent is None:
+            self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+            self.setAttribute(Qt.WA_TranslucentBackground)  # the rounded corners stay round
+            self.setAttribute(Qt.WA_ShowWithoutActivating)
+            self.setStyleSheet(themes.qss())
         self.themes = themes
         self.kind = kind
         self.key = key
@@ -169,6 +177,7 @@ class Toast(QtWidgets.QFrame):
             self._timer.stop()
             parent = self.parentWidget()
             self.hide()
+            self.expired.emit()
             self.deleteLater()
             if parent is not None and hasattr(parent, "place_toasts"):
                 QtCore.QTimer.singleShot(0, parent.place_toasts)
@@ -723,6 +732,7 @@ class ManagerWindow(QtWidgets.QWidget):
         # After an operation the card waits briefly for its result (runtime.notify follows busy_changed("")),
         # shows the tick or the alert, then hides.
         self._busy_finishing = False
+        self._busy_toast = None  # (text, kind, action, key) shown when the card hides
         self._busy_timer = QtCore.QTimer(self)
         self._busy_timer.setSingleShot(True)
         self._busy_timer.timeout.connect(self._hide_busy)
@@ -1035,7 +1045,7 @@ class ManagerWindow(QtWidgets.QWidget):
             add_action(menu, "Help", lambda: self.runtime.open_link(package, "documentation"))
         on_toolbar = self.runtime.is_on_toolbar(package)
         add_action(menu, "Hide from Toolbar" if on_toolbar else "Show in Toolbar",
-                   lambda: self.runtime.set_toolbar_visible(guid, not on_toolbar))
+                   lambda: self.set_on_toolbar(guid, not on_toolbar))
         if developer:
             menu.addSeparator()
             add_action(menu, "Copy GUID", lambda: self.copy_text(package.guid, "GUID copied."))
@@ -1044,6 +1054,16 @@ class ManagerWindow(QtWidgets.QWidget):
         add_action(menu, "Uninstall", lambda: self.uninstall(guid), self.themes, "trash-2", "iconDanger")
         exec_menu(menu, anchor.mapToGlobal(QtCore.QPoint(0, anchor.height() + 4)))
         menu.deleteLater()
+
+    def set_on_toolbar(self, guid, visible):
+        package = self.runtime.package(guid)
+        if package is None or not self.runtime.set_toolbar_visible(guid, visible):
+            return
+        if visible:
+            self.notify("{} is on the toolbar again.".format(package.display_name), "success")
+        else:
+            self.notify("{} is hidden from the toolbar.\nIt stays installed; show it again any time.".format(
+                package.display_name), "info", action=("Show", "eye", lambda: self.set_on_toolbar(guid, True)))
 
     def copy_text(self, text, message):
         QtWidgets.QApplication.clipboard().setText(text)
@@ -1159,6 +1179,9 @@ class ManagerWindow(QtWidgets.QWidget):
         if message:
             self._busy_timer.stop()
             self._busy_finishing = False
+            pending, self._busy_toast = self._busy_toast, None
+            if pending is not None:  # the next operation started before the card hid: keep its result
+                self.notify(*pending)
             self._show_busy(message)
         elif self.busy.isVisible() and not self._busy_finishing and self.busy_card.icon.state() == "running":
             # A result already on the card keeps its own timer; a second "operation ended" must not cut it short.
@@ -1168,6 +1191,9 @@ class ManagerWindow(QtWidgets.QWidget):
     def _hide_busy(self):
         self._busy_finishing = False
         self.busy.hide()
+        pending, self._busy_toast = self._busy_toast, None
+        if pending is not None:
+            self.notify(*pending)  # the result stays readable as a toast once the card is gone
 
     def _on_checking(self, checking):
         self.check_button.set_label("Checking updates..." if checking else "Check Updates")
@@ -1204,12 +1230,13 @@ class ManagerWindow(QtWidgets.QWidget):
                     toast.restart()
                     return
         if self._busy_finishing and kind in ("success", "error"):
+            # The card shows the result first; the same message follows as a toast when the card hides.
             self._busy_finishing = False
             self.busy_card.show_result(kind, text)
             self._place_busy()
             self._busy_timer.start(self.BUSY_DONE_MS if kind == "success" else self.BUSY_ERROR_MS)
-            if kind == "success":
-                return  # the card already says it; errors keep their toast with the details
+            self._busy_toast = (text, kind, action, key)
+            return
         toast = Toast(text, kind, self.themes, self, action=action, key=key)
         toast.show()
         self._toasts = [item for item in self._toasts if is_valid(item) and item.isVisible()] + [toast]

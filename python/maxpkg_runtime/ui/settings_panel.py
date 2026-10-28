@@ -363,7 +363,7 @@ class SettingsPanel(QtWidgets.QWidget):
         config.setLayout(config_layout)
         page.addWidget(config)
         reset_order = Button("Reset package order", "", "default", themes)
-        reset_order.clicked.connect(self.runtime.reset_toolbar_order)
+        reset_order.clicked.connect(self._reset_order)
         self.reset_position = Button("Reset toolbar position", "", "default", themes)
         self.reset_position.clicked.connect(lambda: self.manager_window.reset_toolbar_position())
         reset_defaults = Button("Reset toolbar defaults", "", "default", themes)
@@ -431,7 +431,14 @@ class SettingsPanel(QtWidgets.QWidget):
         settings.toolbar_icon_size = "large"
         settings.hidden_packages = []
         self.runtime.save_settings("toolbar")
-        self.runtime.reset_toolbar_order()
+        if self.runtime.reset_toolbar_order():
+            self.manager_window.notify("The toolbar is back to its defaults.\nAll scripts are shown, in their "
+                                       "original order, without dividers.", "success")
+
+    def _reset_order(self):
+        if self.runtime.reset_toolbar_order():
+            self.manager_window.notify("The toolbar order is reset.\nScripts are back in their original order, "
+                                       "without dividers.", "success")
 
     def _copy_info(self):
         from ..qt_compat import binding_info
