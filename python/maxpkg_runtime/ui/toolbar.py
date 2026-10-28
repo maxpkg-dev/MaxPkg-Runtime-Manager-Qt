@@ -273,8 +273,7 @@ class ToolbarDivider(QtWidgets.QWidget):
         QtWidgets.QWidget.__init__(self, parent)
         self.item = ToolbarItem(DIVIDER, "", "", "Divider - drag to move, right-click to remove", "", "", False)
         self.setToolTip(self.item.tooltip)
-        self.setCursor(Qt.SizeAllCursor)
-        self.setAttribute(Qt.WA_Hover)
+        self.setAttribute(Qt.WA_Hover)  # the normal arrow on hover; a closed hand only while it is dragged
         self._dragging = False
         self.apply(style, toolbar_theme)
 
@@ -320,7 +319,7 @@ class ToolbarDivider(QtWidgets.QWidget):
     def mouseReleaseEvent(self, event):
         if self._dragging:
             self._dragging = False
-            self.setCursor(Qt.SizeAllCursor)
+            self.unsetCursor()
             self.update()
             self.alt_drag.emit(self, None)
             event.accept()
