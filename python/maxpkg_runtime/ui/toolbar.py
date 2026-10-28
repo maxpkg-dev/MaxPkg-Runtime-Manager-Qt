@@ -12,7 +12,7 @@ from ..qt_compat import (QAction, QtCore, QtGui, QtWidgets, Qt, Signal, event_gl
 from . import icons
 from .dialogs import confirm
 from .frame import apply_native_frame, native_event
-from .widgets import add_action, add_danger_action, add_menu_title, themed_menu
+from .widgets import add_action, add_choice_action, add_danger_action, add_menu_title, themed_menu, themed_submenu
 
 AREAS = {"top": Qt.TopToolBarArea, "bottom": Qt.BottomToolBarArea, "left": Qt.LeftToolBarArea,
          "right": Qt.RightToolBarArea}
@@ -924,13 +924,12 @@ class ToolbarController(QtCore.QObject):
         add_action(menu, "Open Manager", lambda: self.open_manager(""), self.themes, "package")
         add_action(menu, "Check Updates", lambda: self.runtime.check_updates(True), self.themes, "refresh-cw")
         add_action(menu, "Toolbar settings...", lambda: self.open_manager("settings:toolbar"), self.themes, "settings")
-        dock = menu.addMenu("Position")
-        dock.setObjectName("ContextMenu")
+        dock = themed_submenu(menu, "Position", self.themes, "panel-top")
+        current = self.runtime.settings.toolbar_dock_position
         for key, text in (("top", "Top"), ("bottom", "Bottom"), ("left", "Left"), ("right", "Right"),
                           ("floatinghorizontal", "Floating Horizontal"), ("floatingvertical", "Floating Vertical")):
-            action = add_action(dock, text, lambda _checked=False, value=key: self.set_position(value))
-            action.setCheckable(True)
-            action.setChecked(self.runtime.settings.toolbar_dock_position == key)
+            add_choice_action(dock, text, current == key, lambda _checked=False, value=key: self.set_position(value),
+                              self.themes)
         menu.addSeparator()
         self._add_lock_action(menu)
         add_action(menu, "Hide toolbar", self._hide_toolbar, self.themes, "eye-off")

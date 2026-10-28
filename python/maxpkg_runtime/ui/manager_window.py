@@ -521,20 +521,30 @@ class BusyCard(QtWidgets.QFrame):
 
 
 class ScreenshotPreview(QtWidgets.QWidget):
-    """Full-window screenshot viewer with previous/next and close (Esc)."""
+    """Full-window screenshot viewer with previous/next and close (Esc). Like Fancybox, dragging the image up or
+    down fades the backdrop and, past a short distance, throws the image off and closes; the backdrop fades in
+    when it opens."""
 
     def __init__(self, window, shots, index):
         QtWidgets.QWidget.__init__(self, window)
-        self.setObjectName("BusyShade")
-        self.setAttribute(Qt.WA_StyledBackground)
+        self.setObjectName("Lightbox")
         self.manager_window = window
+        self.themes = window.themes
         self.shots = shots
         self.index = index
+        self._shade = 0.0  # backdrop strength 0..1 (it paints itself so a drag can fade it)
         images = window.images
         self.image = SlideView(len(shots), lambda position: images.get(shots[position].url), window.themes,
-                               inset=70, parent=self)
+                               inset=70, dismissible=True, parent=self)
         self.image.set_index(index)
         self.image.index_changed.connect(self._on_index)
+        self.image.dismiss_progress.connect(self._on_dismiss_progress)
+        self.image.dismissed.connect(self.close_preview)
+        self._fade_in = QtCore.QVariantAnimation(self)
+        self._fade_in.setDuration(200)
+        self._fade_in.setStartValue(0.0)
+        self._fade_in.setEndValue(1.0)
+        self._fade_in.valueChanged.connect(self._set_shade)
         self.caption = label("", "ToastText", parent=self)
         self.caption.setAlignment(Qt.AlignCenter)
         self.buttons = []
@@ -558,6 +568,29 @@ class ScreenshotPreview(QtWidgets.QWidget):
         self.activateWindow()
         self.setFocus(Qt.OtherFocusReason)
         self._paint()
+        self._fade_in.start()
+
+    def _set_shade(self, value):
+        self._shade = float(value)
+        self.update()
+
+    def _on_dismiss_progress(self, progress):
+        """The image is dragged up or down: the backdrop fades, the controls step aside until it comes back."""
+        self._fade_in.stop()
+        self._set_shade(1.0 - 0.85 * progress)
+        resting = progress < 0.01
+        for widget in self.buttons + [self.caption]:
+            widget.setVisible(resting)
+
+    def paintEvent(self, _event):
+        color = QtGui.QColor(self.themes.manager.color("backgroundOverlay"))
+        color.setAlphaF(color.alphaF() * self._shade)
+        painter = QtGui.QPainter(self)
+        painter.fillRect(self.rect(), color)
+        painter.end()
+
+    def mousePressEvent(self, event):
+        event.accept()  # clicks on the backdrop stay in the lightbox
 
     def close_preview(self):
         self.hide()

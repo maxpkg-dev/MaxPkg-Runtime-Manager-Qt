@@ -410,9 +410,13 @@ DRAG_THRESHOLD = 6  # px of movement before a press becomes a drag instead of a 
 SWIPE_DISTANCE = 40  # px of horizontal drag that switches to the next/previous image
 
 
-def _event_x(event):
+def _event_global(event):
     position = event.globalPosition() if hasattr(event, "globalPosition") else event.globalPos()
-    return position.x()
+    return position.x(), position.y()
+
+
+def _event_x(event):
+    return _event_global(event)[0]
 
 
 class DragScroll(QtCore.QObject):
@@ -456,43 +460,56 @@ class DragScroll(QtCore.QObject):
 
 
 class Swipe(QtCore.QObject):
-    """Horizontal drag on a widget: `dragged(dx)` while it moves, `released(dx)` when it ends,
-    `clicked()` for a press and release without a drag."""
+    """Drag on a widget: `dragged(dx)` while it moves sideways, `released(dx)` when it ends, `clicked()` for a press
+    and release without a drag. With `vertical=True` a drag that starts mostly up or down reports
+    `dragged_vertical(dy)` / `released_vertical(dy)` instead (the direction is decided by the first pixels)."""
 
     dragged = Signal(int)
     released = Signal(int)
+    dragged_vertical = Signal(int)
+    released_vertical = Signal(int)
     clicked = Signal()
 
-    def __init__(self, widget):
+    def __init__(self, widget, vertical=False):
         QtCore.QObject.__init__(self, widget)
+        self.vertical = vertical
         self._start = None
-        self._dragging = False
+        self._axis = None  # None until the drag starts, then "x" or "y"
         self._cursor = None
         widget.installEventFilter(self)
+
+    def _deltas(self, event):
+        x, y = _event_global(event)
+        return x - self._start[0], y - self._start[1]
 
     def eventFilter(self, watched, event):
         kind = event.type()
         if kind == QtCore.QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-            self._start = _event_x(event)
-            self._dragging = False
+            self._start = _event_global(event)
+            self._axis = None
             return True
         if kind == QtCore.QEvent.MouseMove and self._start is not None:
-            delta = _event_x(event) - self._start
-            if not self._dragging and abs(delta) > DRAG_THRESHOLD:
-                self._dragging = True
+            dx, dy = self._deltas(event)
+            if self._axis is None and max(abs(dx), abs(dy)) > DRAG_THRESHOLD:
+                self._axis = "y" if self.vertical and abs(dy) > abs(dx) else "x"
                 self._cursor = watched.cursor()
                 watched.setCursor(Qt.ClosedHandCursor)
-            if self._dragging:
-                self.dragged.emit(int(delta))
-            return self._dragging
+            if self._axis == "x":
+                self.dragged.emit(int(dx))
+            elif self._axis == "y":
+                self.dragged_vertical.emit(int(dy))
+            return self._axis is not None
         if kind == QtCore.QEvent.MouseButtonRelease and self._start is not None and event.button() == Qt.LeftButton:
-            delta = _event_x(event) - self._start
-            dragged = self._dragging
+            dx, dy = self._deltas(event)
+            axis = self._axis
             self._start = None
-            self._dragging = False
-            if dragged:
+            self._axis = None
+            if axis is not None:
                 watched.setCursor(self._cursor)
-                self.released.emit(int(delta))
+            if axis == "x":
+                self.released.emit(int(dx))
+            elif axis == "y":
+                self.released_vertical.emit(int(dy))
             else:
                 self.clicked.emit()
             return True
@@ -508,12 +525,22 @@ class SlideView(QtWidgets.QWidget):
 
     index_changed = Signal(int)
     clicked = Signal()
+    dismiss_progress = Signal(float)  # 0..1 while the image is dragged up or down (dismissible only)
+    dismissed = Signal()              # it was thrown off the screen: close the viewer
     GAP = 24
+    DISMISS_DISTANCE = 110  # px of vertical drag that closes, like Fancybox; a shorter one springs back
 
-    def __init__(self, count, pixmap_for, themes, radius=0, inset=2, parent=None):
+    def __init__(self, count, pixmap_for, themes, radius=0, inset=2, dismissible=False, parent=None):
         """radius: rounded clip of the frame; inset: side margin each image is fitted into (slides still cross
-        the whole widget)."""
+        the whole widget); dismissible: drag the image up or down to close (the lightbox)."""
         QtWidgets.QWidget.__init__(self, parent)
+        self.lift = 0.0  # vertical offset of the dragged image
+        self._lift_animation = QtCore.QVariantAnimation(self)
+        self._lift_animation.setDuration(260)
+        self._lift_animation.setEasingCurve(QtCore.QEasingCurve.OutCubic)
+        self._lift_animation.valueChanged.connect(self._set_lift)
+        self._lift_animation.finished.connect(self._lift_settled)
+        self._dismissing = False
         self.setAttribute(Qt.WA_StyledBackground)  # the #ScreenshotMain frame still comes from the stylesheet
         self.count = count
         self.pixmap_for = pixmap_for
@@ -535,10 +562,42 @@ class SlideView(QtWidgets.QWidget):
         self._spin_timer = QtCore.QTimer(self)
         self._spin_timer.setInterval(33)
         self._spin_timer.timeout.connect(self.update)
-        self._swipe = Swipe(self)
+        self._swipe = Swipe(self, vertical=dismissible)
         self._swipe.dragged.connect(self._on_drag)
         self._swipe.released.connect(self._on_release)
+        self._swipe.dragged_vertical.connect(self._on_lift)
+        self._swipe.released_vertical.connect(self._on_lift_release)
         self._swipe.clicked.connect(self.clicked.emit)
+
+    # --- drag up or down to dismiss (Fancybox style) ---------------------------------
+    def _progress(self):
+        return min(1.0, abs(self.lift) / max(1.0, self.height() * 0.45))
+
+    def _set_lift(self, value):
+        self.lift = float(value)
+        self.update()
+        self.dismiss_progress.emit(self._progress())
+
+    def _on_lift(self, delta):
+        self._lift_animation.stop()
+        self._set_lift(delta)
+
+    def _on_lift_release(self, delta):
+        self._dismissing = abs(delta) >= self.DISMISS_DISTANCE
+        end = (self.height() if delta > 0 else -self.height()) if self._dismissing else 0.0
+        self._lift_animation.setDuration(220 if self._dismissing else 320)
+        self._lift_animation.setEasingCurve(QtCore.QEasingCurve.InCubic if self._dismissing
+                                            else QtCore.QEasingCurve.OutBack)
+        self._lift_animation.setStartValue(float(self.lift))
+        self._lift_animation.setEndValue(float(end))
+        self._lift_animation.start()
+
+    def _lift_settled(self):
+        if self._dismissing:
+            self._dismissing = False
+            self.dismissed.emit()
+        else:
+            self._set_lift(0.0)
 
     def set_index(self, index):
         self._animation.stop()
@@ -631,7 +690,14 @@ class SlideView(QtWidgets.QWidget):
             painter.setClipPath(clip)
         area = QtCore.QRectF(self.rect()).adjusted(self.inset, 2, -self.inset, -2)
         size = QtCore.QSize(int(area.width()), int(area.height()))
-        neighbours = (-1, 0, 1) if self.count > 1 else (0,)
+        if self.lift:
+            # Dragged up or down: the image follows and shrinks a little (up to 15 %), around its centre.
+            scale = 1.0 - 0.15 * self._progress()
+            middle = area.center()
+            painter.translate(middle.x(), middle.y() + self.lift)
+            painter.scale(scale, scale)
+            painter.translate(-middle.x(), -middle.y())
+        neighbours = (-1, 0, 1) if self.count > 1 and not self.lift else (0,)
         loading = False
         for step in neighbours:
             left = area.left() + step * self._span() + self.offset
@@ -1002,6 +1068,36 @@ def paint_check(painter, rect, checked, hovered, theme, radio=False, dpr=1.0):
     painter.restore()
 
 
+def add_choice_action(menu, text, checked, callback, themes):
+    """One option of a group, drawn as our radio (ring; accent dot when chosen) in the icon column, instead of
+    Qt's own check mark."""
+    dpr = menu.devicePixelRatioF()
+    pixmap = QtGui.QPixmap(int(16 * dpr), int(16 * dpr))
+    pixmap.setDevicePixelRatio(dpr)
+    pixmap.fill(Qt.transparent)
+    painter = QtGui.QPainter(pixmap)
+    paint_check(painter, QtCore.QRectF(1, 1, 14, 14), checked, False, themes.manager, radio=True, dpr=dpr)
+    painter.end()
+    action = menu.addAction(text)
+    action.setIcon(QtGui.QIcon(pixmap))
+    if checked:
+        font = QtGui.QFont(action.font())
+        font.setBold(True)
+        action.setFont(font)
+    action.triggered.connect(callback)
+    return action
+
+
+def themed_submenu(menu, text, themes, icon_name=""):
+    """A submenu with the same frameless rounded look as `themed_menu` and an icon on its row."""
+    submenu = themed_menu(menu)
+    submenu.setTitle(text)
+    if icon_name:
+        submenu.menuAction().setIcon(icons.icon(icon_name, themes.color("iconPrimary"), 16, menu.devicePixelRatioF()))
+    menu.addMenu(submenu)
+    return submenu
+
+
 def themed_menu(parent):
     menu = QtWidgets.QMenu(parent)
     menu.setObjectName("ContextMenu")
@@ -1067,7 +1163,8 @@ class _MenuTitle(QtWidgets.QWidget):
     darker band, with a bold name and a muted line under it, so it never reads as a menu item."""
 
     ICON = 22
-    HEIGHT = 46
+    HEIGHT = 48
+    LINE_GAP = 3  # px between the name and the line under it
 
     triggered = Signal()
 
@@ -1141,8 +1238,11 @@ class _MenuTitle(QtWidgets.QWidget):
         width = self.width() - left - 10 - (24 if self.link_icon else 0)
         title_metrics = QtGui.QFontMetrics(self.title_font)
         if self.subtitle:
-            title_top = band.height() / 2.0 - title_metrics.height() + 2
-            sub_top = band.height() / 2.0 + 1
+            # Both lines centred as one block, LINE_GAP apart (they no longer touch).
+            sub_height = QtGui.QFontMetrics(self.sub_font).height()
+            block = title_metrics.height() + self.LINE_GAP + sub_height
+            title_top = (band.height() - block) / 2.0
+            sub_top = title_top + title_metrics.height() + self.LINE_GAP
         else:
             title_top = (band.height() - title_metrics.height()) / 2.0
         painter.setFont(self.title_font)
