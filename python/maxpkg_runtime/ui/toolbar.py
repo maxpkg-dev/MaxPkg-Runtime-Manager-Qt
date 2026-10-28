@@ -9,8 +9,9 @@ itself is never destroyed while the Runtime runs. Package buttons look like the 
 from ..qt_compat import (QAction, QtCore, QtGui, QtWidgets, Qt, Signal, event_global_pos, exec_menu, is_valid,
                          max_main_window, screen_at)
 from . import icons
+from .dialogs import confirm
 from .frame import apply_native_frame, native_event
-from .widgets import add_action, themed_menu
+from .widgets import add_action, add_danger_action, themed_menu
 
 AREAS = {"top": Qt.TopToolBarArea, "bottom": Qt.BottomToolBarArea, "left": Qt.LeftToolBarArea,
          "right": Qt.RightToolBarArea}
@@ -763,8 +764,20 @@ class ToolbarController(QtCore.QObject):
                    "eye-off")
         menu.addSeparator()
         add_action(menu, "Toolbar settings...", lambda: self.open_manager("settings:toolbar"), self.themes, "settings")
+        menu.addSeparator()
+        add_danger_action(menu, "Uninstall", lambda: self._uninstall(guid), self.themes)
         exec_menu(menu, QtGui.QCursor.pos())
         menu.deleteLater()
+
+    def _uninstall(self, guid):
+        """Same question and wording as the Manager's Uninstall."""
+        package = self.runtime.package(guid)
+        if package is None:
+            return
+        if confirm(max_main_window(), self.themes, "Uninstall {}?".format(package.display_name),
+                   "The package files, its 3ds Max buttons and menu entries will be removed. Your scenes are not "
+                   "changed.", "Uninstall", "trash-2", danger=True, icon_name="trash-2"):
+            self.runtime.uninstall(guid)
 
     def _brand_menu(self):
         menu = themed_menu(None)

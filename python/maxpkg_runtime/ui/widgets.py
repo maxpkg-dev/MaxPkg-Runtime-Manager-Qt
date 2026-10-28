@@ -5,7 +5,7 @@ Variants are Qt properties read by assets/manager.qss (``variant``, ``badge``, `
 
 import math
 
-from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal, disable_max_accelerators, is_valid
+from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal, disable_max_accelerators, event_pos, is_valid
 from . import icons
 
 
@@ -1008,6 +1008,60 @@ def themed_menu(parent):
     menu.setWindowFlags(menu.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
     menu.setAttribute(Qt.WA_TranslucentBackground)
     return menu
+
+
+class _DangerRow(QtWidgets.QWidget):
+    """One red menu row (QSS styles every QMenu item alike, so a destructive item paints itself)."""
+
+    triggered = Signal()
+
+    def __init__(self, text, icon_name, themes, parent=None):
+        QtWidgets.QWidget.__init__(self, parent)
+        self.text = text
+        self.icon_name = icon_name
+        self.themes = themes
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_Hover)
+        self.setMinimumWidth(150)
+        self.setFixedHeight(self.fontMetrics().height() + 14)
+
+    def sizeHint(self):
+        return QtCore.QSize(16 + 16 + 10 + self.fontMetrics().horizontalAdvance(self.text) + 24, self.height())
+
+    def event(self, event):
+        if event.type() in (QtCore.QEvent.HoverEnter, QtCore.QEvent.HoverLeave):
+            self.update()
+        return QtWidgets.QWidget.event(self, event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event_pos(event)):
+            self.triggered.emit()
+
+    def paintEvent(self, _event):
+        theme = self.themes.manager
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        if self.underMouse():
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(theme.color("dangerSurface"))
+            painter.drawRoundedRect(QtCore.QRectF(self.rect()).adjusted(4, 1, -4, -1), 7, 7)
+        glyph = icons.pixmap(self.icon_name, theme.color("iconDanger"), 16, self.devicePixelRatioF())
+        painter.drawPixmap(QtCore.QPointF(16, (self.height() - 16) / 2.0), glyph)
+        painter.setPen(theme.color("dangerText"))
+        painter.drawText(QtCore.QRect(42, 0, self.width() - 42, self.height()), int(Qt.AlignLeft | Qt.AlignVCenter),
+                         self.text)
+        painter.end()
+
+
+def add_danger_action(menu, text, callback, themes, icon_name="trash-2"):
+    """A red destructive item at the end of a themed menu; the menu closes before `callback` runs."""
+    row = _DangerRow(text, icon_name, themes)
+    action = QtWidgets.QWidgetAction(menu)
+    action.setDefaultWidget(row)
+    row.triggered.connect(menu.close)
+    row.triggered.connect(lambda: QtCore.QTimer.singleShot(0, callback))  # after the menu's own loop ends
+    menu.addAction(action)
+    return action
 
 
 def add_action(menu, text, callback, themes=None, icon_name="", token="iconPrimary"):
