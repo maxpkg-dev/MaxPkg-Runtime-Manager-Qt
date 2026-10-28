@@ -82,9 +82,12 @@ MaxScript Runtime problems it replaces. Read before changing lifecycle, threadin
   old public API whose calls go to `Controller.maxscript_call`; it is defined even when start-with-Max is off.
 - The facade instance must survive `MaxPkg.start()`: that call launches a new Controller while the same
   instance waits for its reply, so `define_facade` keeps an instance of the same version.
-- `python.ExecuteFile` run from inside Python (a package installed by the Manager calling `MaxPkg.start()`)
-  keeps the caller's `__file__`: wrappers that locate `entry.py` by `__file__` then look in the wrong folder.
-  The facade runs `entry.py` by absolute path.
+- **Never start our Python with `python.ExecuteFile`.** Run while Python is already on the stack (a package
+  installed by the Manager calling `MaxPkg.start()`, a Max action clicked during a nested event loop) it keeps the
+  caller's `__file__`: `bootstrap.py` then stopped the running Manager and failed to load from the caller's
+  folder. `StartMaxPkg.ms`, the startup script, the MacroScript, `install.ms`, `uninstall.ms` and the facade use
+  `python.Execute "import runpy; runpy.run_path('<absolute path>', run_name='__main__')"` (forward slashes,
+  `'` escaped).
 - 3ds Max accelerators take Esc and the arrow keys before Qt: overlays that need them call
   `qt_compat.disable_max_accelerators` and keep their buttons `NoFocus`.
 - `MaxPkg` is the MaxScript global of the old Runtime. Do not define it while the old Runtime runs

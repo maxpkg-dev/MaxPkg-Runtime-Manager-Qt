@@ -43,7 +43,9 @@
         local stopEntry = runtimeRoot + @"python\stop.py"
         if (doesFileExist stopEntry) do (
             try (
-                python.ExecuteFile stopEntry
+                -- runpy with the absolute path: python.ExecuteFile keeps a calling Python's __file__.
+                local pythonPath = substituteString (substituteString stopEntry @"\" "/") "'" @"\'"
+                python.Execute ("import runpy; runpy.run_path('" + pythonPath + "', run_name='__main__')")
             ) catch (
                 append problems ("The Package Manager could not be stopped: " + getCurrentException())
             )

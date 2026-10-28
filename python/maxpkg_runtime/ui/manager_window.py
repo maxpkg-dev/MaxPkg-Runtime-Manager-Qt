@@ -66,11 +66,12 @@ class Toast(QtWidgets.QFrame):
     WIDTH = 340
     RADIUS = 14
 
-    def __init__(self, text, kind, themes, parent):
+    def __init__(self, text, kind, themes, parent, action=None, key=""):
         QtWidgets.QFrame.__init__(self, parent)
         self.setObjectName("Toast")
         self.themes = themes
         self.kind = kind
+        self.key = key
         state, self._token = self.STATES.get(kind, ("info", "accent"))
         self.icon = StatusIcon(themes, size=28)
         self.icon.set_state(state)
@@ -89,6 +90,13 @@ class Toast(QtWidgets.QFrame):
             body = label(lines[1].strip(), "ToastBody", wrap=True)
             body.setFixedWidth(text_width)
             texts.addWidget(body)
+        if action is not None:
+            action_text, action_icon, callback = action
+            button = Button(action_text, action_icon, "primary", themes, compact=True)
+            button.clicked.connect(lambda: (callback(), self._expire()))
+            texts.addSpacing(6)
+            texts.addWidget(button, 0, Qt.AlignLeft)
+        if len(lines) > 1 or action is not None:
             texts.addStretch(1)
         close = IconButton("x", "Close", themes)
         close.setObjectName("ToastClose")
@@ -99,7 +107,7 @@ class Toast(QtWidgets.QFrame):
         row.addWidget(disc, 0, Qt.AlignTop)
         row.addLayout(texts, 1)
         row.addWidget(close, 0, Qt.AlignTop)
-        if len(lines) == 1 or not lines[1].strip():
+        if (len(lines) == 1 or not lines[1].strip()) and action is None:
             row.setAlignment(texts, Qt.AlignVCenter)  # a single line sits beside the icon's middle
         self.setLayout(row)
         self.setFixedWidth(self.WIDTH)
@@ -139,6 +147,13 @@ class Toast(QtWidgets.QFrame):
             self._slide.setEndValue(point)
         else:
             self.move(point)
+
+    def restart(self):
+        """Full time again, and the icon draws itself once more."""
+        self._left = float(self._lifetime)
+        self._clock.restart()
+        self.icon.set_state(self.icon.state())
+        self.update()
 
     def _tick(self):
         elapsed = self._clock.restart()
@@ -1180,7 +1195,14 @@ class ManagerWindow(QtWidgets.QWidget):
         card.adjustSize()
         card.move((self.busy.width() - card.width()) // 2, max(0, int(self.busy.height() * 0.42) - card.height() // 2))
 
-    def notify(self, text, kind="info"):
+    def notify(self, text, kind="info", action=None, key=""):
+        """A toast. `action`: (label, icon name, callback) adds a button; `key`: a toast with the same key that is
+        still open is shown again for its full time instead of a second one."""
+        if key:
+            for toast in self._toasts:
+                if is_valid(toast) and toast.isVisible() and toast.key == key:
+                    toast.restart()
+                    return
         if self._busy_finishing and kind in ("success", "error"):
             self._busy_finishing = False
             self.busy_card.show_result(kind, text)
@@ -1188,10 +1210,19 @@ class ManagerWindow(QtWidgets.QWidget):
             self._busy_timer.start(self.BUSY_DONE_MS if kind == "success" else self.BUSY_ERROR_MS)
             if kind == "success":
                 return  # the card already says it; errors keep their toast with the details
-        toast = Toast(text, kind, self.themes, self)
+        toast = Toast(text, kind, self.themes, self, action=action, key=key)
         toast.show()
         self._toasts = [item for item in self._toasts if is_valid(item) and item.isVisible()] + [toast]
         self.place_toasts()
+
+    def notify_toolbar_locked(self):
+        """Sorting was tried while the toolbar is locked: say so, with an Unlock button."""
+        self.notify("The toolbar is locked.\nUnlock it to change the order of its buttons.", "warning",
+                    action=("Unlock", "lock-open", self._unlock_toolbar), key="toolbar-locked")
+
+    def _unlock_toolbar(self):
+        if self.runtime.set_toolbar_locked(False):
+            self.notify("The toolbar is unlocked.", "success")
 
     def place_toasts(self):
         area = self.content_rect()

@@ -93,20 +93,34 @@
         return "@\"" + (substituteString filePath "\"" "") + "\""
     )
 
+    -- Python files are run with runpy and their absolute path, never python.ExecuteFile: called while Python is
+    -- already on the stack, python.ExecuteFile keeps the caller's __file__ and the entry finds the wrong folder.
+    fn pythonRunCommand pythonFilePath = (
+        local pythonPath = substituteString (substituteString pythonFilePath @"\" "/") "'" @"\'"
+        return "import runpy; runpy.run_path('" + pythonPath + "', run_name='__main__')"
+    )
+
+    fn maxScriptStringLiteral sourceContent = (
+        local literalContent = substituteString (sourceContent as string) @"\" @"\\"
+        literalContent = substituteString literalContent "\"" "\\\""
+        return "\"" + literalContent + "\""
+    )
+
     fn runPython pythonFilePath = (
         if (not (doesFileExist pythonFilePath)) do throw ("Package Manager file is missing:\n" + pythonFilePath)
-        python.ExecuteFile pythonFilePath
+        python.Execute (pythonRunCommand pythonFilePath)
         return true
     )
 
     fn writeStartupShim shimPath runtimeRoot = (
+        local entryFile = runtimeRoot + @"python\startup.py"
         local shimContent = ""
         shimContent += "-- Starts MaxPkg Package Manager with 3ds Max. Written by install.ms.\n"
         shimContent += "(\n"
-        shimContent += "    local entryPath = " + (maxScriptPathLiteral (runtimeRoot + @"python\startup.py")) + "\n"
+        shimContent += "    local entryPath = " + (maxScriptPathLiteral entryFile) + "\n"
         shimContent += "    if (doesFileExist entryPath) do (\n"
         shimContent += "        try (\n"
-        shimContent += "            python.ExecuteFile entryPath\n"
+        shimContent += "            python.Execute " + (maxScriptStringLiteral (pythonRunCommand entryFile)) + "\n"
         shimContent += "        ) catch (\n"
         shimContent += "            format \"MaxPkg Package Manager could not start: %\\n\" (getCurrentException())\n"
         shimContent += "        )\n"
@@ -129,7 +143,7 @@
         macroContent += "    on execute do (\n"
         macroContent += "        local entryPath = " + (maxScriptPathLiteral (runtimeRoot + @"python\open.py")) + "\n"
         macroContent += "        if (doesFileExist entryPath) then (\n"
-        macroContent += "            python.ExecuteFile entryPath\n"
+        macroContent += "            python.Execute " + (maxScriptStringLiteral (pythonRunCommand (runtimeRoot + @"python\open.py"))) + "\n"
         macroContent += "        ) else (\n"
         macroContent += "            messageBox \"MaxPkg Package Manager is not installed. Install it again from maxpkg.dev.\" title: \"MaxPkg\"\n"
         macroContent += "        )\n"
@@ -218,7 +232,7 @@
         local stopEntry = targetRoot + @"python\stop.py"
         if (doesFileExist stopEntry) do (
             try (
-                python.ExecuteFile stopEntry
+                runPython stopEntry
             ) catch (
                 format "MaxPkg could not stop the running Package Manager: %\n" (getCurrentException())
             )

@@ -18,6 +18,7 @@ _FIELDS = (
     ("hidden_packages", "Toolbar", "Hidden", "list", (), None),
     ("toolbar_order", "Toolbar", "Order", "list", (), None),
     ("toolbar_visible", "Toolbar", "Visible", "bool", True, None),
+    ("toolbar_locked", "Toolbar", "Locked", "bool", False, None),  # buttons and dividers keep their places
     ("toolbar_title_mode", "Toolbar", "TitleMode", "choice", "packageName", ("packageName", "buttonName")),
     ("toolbar_subtitle_mode", "Toolbar", "SubtitleMode", "choice", "version", ("none", "version", "developer")),
     ("toolbar_button_size", "Toolbar", "ButtonSize", "choice", "medium", ("icon", "small", "medium", "large")),

@@ -1048,22 +1048,26 @@ class _DangerRow(QtWidgets.QWidget):
         theme = self.themes.manager
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        if self.underMouse():
+        enabled = self.isEnabled()
+        if enabled and self.underMouse():
             painter.setPen(Qt.NoPen)
             painter.setBrush(theme.color("dangerSurface"))
             painter.drawRoundedRect(QtCore.QRectF(self.rect()), 7, 7)  # the same shape as ::item:selected
-        glyph = icons.pixmap(self.icon_name, theme.color("iconDanger"), 16, self.devicePixelRatioF())
+        tint = theme.color("iconDanger" if enabled else "textDisabled")
+        glyph = icons.pixmap(self.icon_name, tint, 16, self.devicePixelRatioF())
         painter.drawPixmap(QtCore.QPointF(self.ICON_X, (self.height() - 16) / 2.0), glyph)
-        painter.setPen(theme.color("dangerText"))
+        painter.setPen(theme.color("dangerText" if enabled else "textDisabled"))
         painter.drawText(QtCore.QRect(self.TEXT_X, 0, self.width() - self.TEXT_X, self.height()),
                          int(Qt.AlignLeft | Qt.AlignVCenter), self.text)
         painter.end()
 
 
-def add_danger_action(menu, text, callback, themes, icon_name="trash-2"):
+def add_danger_action(menu, text, callback, themes, icon_name="trash-2", enabled=True):
     """A red destructive item at the end of a themed menu; the menu closes before `callback` runs."""
     row = _DangerRow(text, icon_name, themes)
+    row.setEnabled(enabled)
     action = QtWidgets.QWidgetAction(menu)
+    action.setEnabled(enabled)
     action.setDefaultWidget(row)
     row.triggered.connect(menu.close)
     row.triggered.connect(lambda: QtCore.QTimer.singleShot(0, callback))  # after the menu's own loop ends

@@ -153,6 +153,11 @@ class DragHandle(QtWidgets.QLabel):
         if self._press is None or (event.pos() - self._press).manhattanLength() < 4:
             return
         self._press = None
+        host = self.card.host
+        if host.runtime.settings.toolbar_locked:  # a locked toolbar keeps its order: say so instead
+            if hasattr(host, "notify_toolbar_locked"):
+                host.notify_toolbar_locked()
+            return
         drag = QtGui.QDrag(self)
         data = QtCore.QMimeData()
         data.setData(DRAG_MIME, self.card.package.guid.encode("utf-8"))

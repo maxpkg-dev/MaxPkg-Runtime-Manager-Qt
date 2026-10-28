@@ -93,6 +93,7 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         self.brand = brand
         self.brand_icon = brand_icon
         self.badge_count = 0
+        self.locked = False  # Toolbar lock: no Alt + drag (set by ToolbarController)
         self.setFocusPolicy(Qt.NoFocus)
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_Hover)
@@ -238,6 +239,10 @@ class ToolbarButton(QtWidgets.QAbstractButton):
     # --- Alt + drag reorder -------------------------------------------------------
     def mousePressEvent(self, event):
         if not self.brand and event.button() == Qt.LeftButton and event.modifiers() & Qt.AltModifier:
+            if self.locked:
+                show_locked_hint(event)
+                event.accept()
+                return
             self._dragging = True
             self.setCursor(Qt.ClosedHandCursor)
             self.update()
@@ -262,6 +267,13 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         QtWidgets.QAbstractButton.mouseReleaseEvent(self, event)
 
 
+LOCKED_HINT = "The toolbar is locked. Right-click it and choose Unlock Toolbar to arrange it."
+
+
+def show_locked_hint(event):
+    QtWidgets.QToolTip.showText(event_global_pos(event), LOCKED_HINT)
+
+
 class ToolbarDivider(QtWidgets.QWidget):
     """A divider between toolbar buttons: a thin rounded line across the line of buttons. It has no click, so a
     plain drag moves it (Alt + drag works too, like the buttons); its menu moves or removes it."""
@@ -275,6 +287,7 @@ class ToolbarDivider(QtWidgets.QWidget):
         self.setToolTip(self.item.tooltip)
         self.setAttribute(Qt.WA_Hover)  # the normal arrow on hover; a closed hand only while it is dragged
         self._dragging = False
+        self.locked = False
         self.apply(style, toolbar_theme)
 
     def apply(self, style, toolbar_theme):
@@ -303,6 +316,10 @@ class ToolbarDivider(QtWidgets.QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            if self.locked:
+                show_locked_hint(event)
+                event.accept()
+                return
             self._dragging = True
             self.setCursor(Qt.ClosedHandCursor)
             self.update()
@@ -675,6 +692,8 @@ class ToolbarController(QtCore.QObject):
             else:
                 button.apply(item, style, theme)
             ordered.append(button)
+        for widget in ordered:
+            widget.locked = settings.toolbar_locked
         strip.buttons = ordered
         strip.relayout()
         self._apply_host_theme(style)
@@ -847,18 +866,23 @@ class ToolbarController(QtCore.QObject):
             add_action(menu, "Update to " + package.latest_version, lambda: self.runtime.update(guid), self.themes,
                        "download", "iconSuccess")
         menu.addSeparator()
+        add_action(menu, "Browse More Scripts", lambda: self.open_manager("discover"), self.themes, "search")
+        menu.addSeparator()
+        unlocked = not self.runtime.settings.toolbar_locked
         index = [button.item.guid for button in self.strip.buttons].index(guid)
         move_back = add_action(menu, "Move Up" if self.strip.style_info.vertical else "Move Left",
                                lambda: self._move(guid, -1), self.themes, "arrow-left")
-        move_back.setEnabled(index > 0)
+        move_back.setEnabled(unlocked and index > 0)
         move_next = add_action(menu, "Move Down" if self.strip.style_info.vertical else "Move Right",
                                lambda: self._move(guid, 1), self.themes, "arrow-right")
-        move_next.setEnabled(index < len(self.strip.buttons) - 1)
+        move_next.setEnabled(unlocked and index < len(self.strip.buttons) - 1)
         add_action(menu, "Add Divider", lambda: self.runtime.add_toolbar_divider(guid), self.themes,
-                   "separator-vertical" if not self.strip.style_info.vertical else "separator-horizontal")
+                   "separator-vertical" if not self.strip.style_info.vertical else "separator-horizontal"
+                   ).setEnabled(unlocked)
         add_action(menu, "Hide from Toolbar", lambda: self.runtime.set_toolbar_visible(guid, False), self.themes,
-                   "eye-off")
+                   "eye-off").setEnabled(unlocked)
         menu.addSeparator()
+        self._add_lock_action(menu)
         add_action(menu, "Toolbar settings...", lambda: self.open_manager("settings:toolbar"), self.themes, "settings")
         menu.addSeparator()
         add_danger_action(menu, "Uninstall", lambda: self._uninstall(guid), self.themes)
@@ -889,9 +913,17 @@ class ToolbarController(QtCore.QObject):
             action.setCheckable(True)
             action.setChecked(self.runtime.settings.toolbar_dock_position == key)
         menu.addSeparator()
+        self._add_lock_action(menu)
         add_action(menu, "Hide toolbar", self._hide_toolbar, self.themes, "eye-off")
         exec_menu(menu, QtGui.QCursor.pos())
         menu.deleteLater()
+
+    def _add_lock_action(self, menu):
+        """Lock Toolbar / Unlock Toolbar: a locked toolbar keeps every button and divider in its place."""
+        locked = self.runtime.settings.toolbar_locked
+        add_action(menu, "Unlock Toolbar" if locked else "Lock Toolbar",
+                   lambda: self.runtime.set_toolbar_locked(not locked), self.themes,
+                   "lock-open" if locked else "lock")
 
     def set_position(self, position):
         self.runtime.settings.toolbar_dock_position = position
@@ -918,19 +950,21 @@ class ToolbarController(QtCore.QObject):
         index = self.strip.buttons.index(divider)
         ordinal = sum(1 for widget in self.strip.buttons[:index] if is_divider(widget.item.guid))
         vertical = self.strip.style_info.vertical
+        unlocked = not self.runtime.settings.toolbar_locked
         menu = themed_menu(None)
         menu.setStyleSheet(self.themes.qss())
         move_back = add_action(menu, "Move Up" if vertical else "Move Left", lambda: self._move_index(index, -1),
                                self.themes, "arrow-left")
-        move_back.setEnabled(index > 0)
+        move_back.setEnabled(unlocked and index > 0)
         move_next = add_action(menu, "Move Down" if vertical else "Move Right", lambda: self._move_index(index, 1),
                                self.themes, "arrow-right")
-        move_next.setEnabled(index < len(self.strip.buttons) - 1)
+        move_next.setEnabled(unlocked and index < len(self.strip.buttons) - 1)
         menu.addSeparator()
+        self._add_lock_action(menu)
         add_action(menu, "Toolbar settings...", lambda: self.open_manager("settings:toolbar"), self.themes, "settings")
         menu.addSeparator()
         add_danger_action(menu, "Remove Divider", lambda: self.runtime.remove_toolbar_divider(ordinal), self.themes,
-                          "x")
+                          "x", enabled=unlocked)
         exec_menu(menu, QtGui.QCursor.pos())
         menu.deleteLater()
 

@@ -219,6 +219,9 @@ class InstalledPage(ScrollPage):
         shown = [card.package.guid for card in self.grid.items()]
         if guid not in shown or target is None or target[0] == guid:
             return
+        if self.settings.toolbar_locked:  # locked while the card was being dragged
+            self.manager_window.notify_toolbar_locked()
+            return
         shown.remove(guid)
         index = shown.index(target[0]) + (1 if target[1] else 0)
         shown.insert(index, guid)

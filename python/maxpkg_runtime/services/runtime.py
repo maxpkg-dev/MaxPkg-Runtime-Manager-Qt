@@ -157,8 +157,15 @@ class Runtime(QtCore.QObject):
         """Visible packages and DIVIDER entries in toolbar order (only the toolbar shows dividers)."""
         return toolbar_entries(self.packages, self.settings.toolbar_order, self.settings.is_hidden)
 
+    def set_toolbar_locked(self, locked):
+        """A locked toolbar keeps its buttons and dividers where they are (no reordering, dividers or hiding)."""
+        self.settings.toolbar_locked = bool(locked)
+        return self.save_settings("toolbar")
+
     def add_toolbar_divider(self, after_guid):
         """Insert a divider right after `after_guid` in the saved order (any number of dividers is allowed)."""
+        if self.settings.toolbar_locked:
+            return False
         order = list(self.settings.toolbar_order)
         lowered = [entry.lower() for entry in order]
         position = lowered.index(after_guid.lower()) + 1 if after_guid.lower() in lowered else len(order)
@@ -167,6 +174,8 @@ class Runtime(QtCore.QObject):
 
     def remove_toolbar_divider(self, ordinal):
         """Remove the `ordinal`-th divider (0-based, the same count as on the toolbar)."""
+        if self.settings.toolbar_locked:
+            return False
         order = list(self.settings.toolbar_order)
         positions = [index for index, entry in enumerate(order) if is_divider(entry)]
         if not 0 <= ordinal < len(positions):
@@ -200,6 +209,9 @@ class Runtime(QtCore.QObject):
         return ok
 
     def set_toolbar_order(self, visible_guids):
+        if self.settings.toolbar_locked:
+            self.packages_changed.emit()  # puts a live-dragged floating button back in its place
+            return False
         visible = [package.guid for package in self.toolbar_packages()]
         merged = merge_visible_order(self.settings.toolbar_order, visible_guids, visible)
         self.settings.toolbar_order = normalized_order(self.packages, merged)
