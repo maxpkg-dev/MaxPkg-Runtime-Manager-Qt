@@ -30,6 +30,49 @@ class ScrollPage(QtWidgets.QScrollArea):
         self.fades = (EdgeFade(self, "top"), EdgeFade(self, "bottom"))
 
 
+class DropIndicator(QtWidgets.QWidget):
+    """Where a dragged card will land: a glowing accent bar in the gap between two cards (like the toolbar's line),
+    with a round dot at each end."""
+
+    WIDTH = 14  # the glow; the bar itself is 3 px in the middle
+    DOT = 4.5  # radius of the end dots
+
+    def __init__(self, themes, parent):
+        QtWidgets.QWidget.__init__(self, parent)
+        self.themes = themes
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.hide()
+
+    def show_at(self, x, top, height):
+        self.setGeometry(int(round(x - self.WIDTH / 2.0)), top - 6, self.WIDTH, height + 12)
+        self.raise_()
+        self.show()
+        self.update()
+
+    def paintEvent(self, _event):
+        theme = self.themes.manager
+        accent = theme.color("accent")
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        middle = self.width() / 2.0
+        glow = QtGui.QLinearGradient(0, 0, self.width(), 0)
+        for stop, alpha in ((0.0, 0.0), (0.5, 0.28), (1.0, 0.0)):
+            color = QtGui.QColor(accent)
+            color.setAlphaF(alpha)
+            glow.setColorAt(stop, color)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QtGui.QBrush(glow))
+        painter.drawRoundedRect(QtCore.QRectF(self.rect()).adjusted(0, self.DOT, 0, -self.DOT), middle, middle)
+        top, bottom = self.DOT + 1.5, self.height() - self.DOT - 1.5
+        painter.setBrush(accent)
+        painter.drawRoundedRect(QtCore.QRectF(middle - 1.5, top, 3, bottom - top), 1.5, 1.5)
+        # Round ends: an accent dot with a ring of the window color, so they read on cards and gaps alike.
+        painter.setPen(QtGui.QPen(theme.color("surfacePrimary"), 1.5))
+        for y in (top, bottom):
+            painter.drawEllipse(QtCore.QPointF(middle, y), self.DOT, self.DOT)
+        painter.end()
+
+
 class InstalledPage(ScrollPage):
     def __init__(self, window, parent=None):
         ScrollPage.__init__(self, parent)
@@ -47,6 +90,8 @@ class InstalledPage(ScrollPage):
         self.canvas.setAcceptDrops(True)
         self.canvas.installEventFilter(self)
         self._drop_guid = None
+        # On the canvas, not the grid: the grid would clip the top dot above the first row.
+        self.drop_indicator = DropIndicator(window.themes, self.canvas)
 
     @property
     def settings(self):
@@ -111,7 +156,9 @@ class InstalledPage(ScrollPage):
             kind = event.type()
             if kind in (QtCore.QEvent.DragEnter, QtCore.QEvent.DragMove) and event.mimeData().hasFormat(DRAG_MIME):
                 event.acceptProposedAction()
-                self._mark_target(self._target(event))
+                guid = bytes(event.mimeData().data(DRAG_MIME)).decode("utf-8")
+                target = self._target(event)
+                self._mark_target(target if self._changes_order(guid, target) else None)
                 return True
             if kind == QtCore.QEvent.DragLeave:
                 self._mark_target(None)
@@ -129,16 +176,44 @@ class InstalledPage(ScrollPage):
         position = self.grid.mapFrom(self.canvas, _event_point(event))
         card = self.grid.item_at(position)
         if card is None:
-            return None
+            # In a gap (where the bar is drawn): the nearest card of the same row, else the nearest card.
+            cards = self.grid.items()
+            if not cards:
+                return None
+            row = [item for item in cards if item.geometry().top() <= position.y() <= item.geometry().bottom()]
+
+            def distance(item):
+                center = item.geometry().center()
+                return abs(center.x() - position.x()) + (0 if row else abs(center.y() - position.y()))
+
+            card = min(row or cards, key=distance)
         after = position.x() > card.geometry().center().x()
         return card.package.guid, after
 
+    def _changes_order(self, guid, target):
+        """False when dropping at `target` would leave the card where it is (next to itself)."""
+        if target is None:
+            return False
+        shown = [card.package.guid for card in self.grid.items()]
+        if guid not in shown or target[0] == guid:
+            return False
+        insert = shown.index(target[0]) + (1 if target[1] else 0)
+        current = shown.index(guid)
+        return insert not in (current, current + 1)
+
     def _mark_target(self, target):
-        for card in self.grid.items():
-            marked = target is not None and card.package.guid == target[0]
-            if (card.property("dropTarget") == "true") != marked:
-                card.setProperty("dropTarget", "true" if marked else "false")
-                repolish(card)
+        """The insertion bar in the gap before (or after) the target card."""
+        indicator = self.drop_indicator
+        card = None
+        if target is not None:
+            card = next((item for item in self.grid.items() if item.package.guid == target[0]), None)
+        if card is None:
+            indicator.hide()
+            return
+        geometry = card.geometry().translated(self.grid.mapTo(self.canvas, QtCore.QPoint(0, 0)))
+        gap = getattr(self.grid, "_spacing", 14)
+        x = geometry.right() + 1 + gap / 2.0 if target[1] else geometry.left() - gap / 2.0
+        indicator.show_at(x, geometry.top(), geometry.height())
 
     def _reorder(self, guid, target):
         shown = [card.package.guid for card in self.grid.items()]
