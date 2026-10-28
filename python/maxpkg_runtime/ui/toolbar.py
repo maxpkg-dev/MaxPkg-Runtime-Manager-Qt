@@ -9,6 +9,7 @@ itself is never destroyed while the Runtime runs. Package buttons look like the 
 from ..qt_compat import (QAction, QtCore, QtGui, QtWidgets, Qt, Signal, event_global_pos, exec_menu, is_valid,
                          max_main_window, screen_at)
 from . import icons
+from .frame import apply_native_frame
 from .widgets import add_action, themed_menu
 
 AREAS = {"top": Qt.TopToolBarArea, "bottom": Qt.BottomToolBarArea, "left": Qt.LeftToolBarArea,
@@ -370,6 +371,11 @@ class FloatingHost(QtWidgets.QWidget):
         self._drag_offset = None
         self._hover_grip = False
         self.setMouseTracking(True)
+
+    def showEvent(self, event):
+        QtWidgets.QWidget.showEvent(self, event)
+        if self.isWindow() and self.theme is not None:  # the Settings preview embeds it as a plain widget
+            apply_native_frame(self, self.theme.color("toolbarBorder"))
 
     def grip_rect(self):
         return QtCore.QRect(0, 0, self.width(), GRIP) if self.vertical else QtCore.QRect(0, 0, GRIP, self.height())

@@ -30,8 +30,12 @@ MaxScript Runtime problems it replaces. Read before changing lifecycle, threadin
   `self.window = ...` shadows `QWidget.window()`. Use `update_package`, `manager_window`.
 - `widget.style()` can return a wrapper whose C++ style was deleted (another tool replaced the app style);
   `widgets.repolish` falls back to re-setting the widget's own sheet.
-- Frameless + rounded windows need `WA_TranslucentBackground` and our own paint; keep overlays inside
-  `content_rect()` so they stay within the rounded shape.
+- Translucent (`WA_TranslucentBackground`) windows get **no Windows shadow**. On Windows 11 keep frameless
+  windows opaque and let DWM round them and draw the shadow (`frame.apply_native_frame`: extend frame by
+  1 px, `DWMWA_WINDOW_CORNER_PREFERENCE`, `DWMWA_BORDER_COLOR`). Only older Windows paints the rounded
+  shape itself. Keep overlays inside `content_rect()`. `grab()` screenshots never show the DWM shadow.
+- **Never use `QMessageBox`/`QInputDialog` inside the Manager.** They inherit the Manager stylesheet (light
+  text) but keep native white buttons: the buttons look empty. Use `ui/dialogs.confirm`.
 
 ## QSS / painting
 

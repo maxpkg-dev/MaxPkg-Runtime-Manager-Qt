@@ -7,11 +7,72 @@
   screen's work area and follows 3ds Max's main window while it is moved.
 """
 
+import ctypes
+import sys
+
 from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, event_global_pos, is_valid, screen_at
 from . import icons
 from .widgets import IconButton
 
 EDGE = 4
+WINDOW_RADIUS = 8.0  # Windows 11 DWM "round" corners use 8 px
+
+
+def _windows_build():
+    if sys.platform != "win32":
+        return 0
+    try:
+        return sys.getwindowsversion().build
+    except AttributeError:
+        return 0
+
+
+# Windows 11 rounds frameless windows and gives them the system shadow through DWM. Translucent
+# (WA_TranslucentBackground) windows never get a shadow, so we only paint our own rounded shape on
+# older systems.
+NATIVE_FRAME = _windows_build() >= 22000
+
+
+class _Margins(ctypes.Structure):
+    _fields_ = [("left", ctypes.c_int), ("right", ctypes.c_int), ("top", ctypes.c_int), ("bottom", ctypes.c_int)]
+
+
+def prepare_window(widget):
+    """Call before the first show: translucent only when DWM cannot shape the window."""
+    if not NATIVE_FRAME:
+        widget.setAttribute(Qt.WA_TranslucentBackground)
+
+
+def apply_native_frame(widget, border_color=None):
+    """System shadow, rounded corners and border color for a frameless window (Windows 11). Safe to repeat."""
+    if not NATIVE_FRAME:
+        return False
+    try:
+        hwnd = ctypes.c_void_p(int(widget.winId()))
+        dwm = ctypes.windll.dwmapi
+        margins = _Margins(1, 1, 1, 1)  # a 1 px extended frame makes DWM draw the shadow of a popup window
+        dwm.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(margins))
+        corner = ctypes.c_int(2)  # DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND
+        dwm.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(corner), ctypes.sizeof(corner))
+        if border_color is not None:  # DWMWA_BORDER_COLOR expects COLORREF 0x00BBGGRR
+            colorref = ctypes.c_uint(border_color.red() | (border_color.green() << 8) | (border_color.blue() << 16))
+            dwm.DwmSetWindowAttribute(hwnd, 34, ctypes.byref(colorref), ctypes.sizeof(colorref))
+        return True
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+def paint_window_shape(widget, painter, fill, border):
+    """Background of a frameless window: plain rectangle under DWM, rounded shape otherwise."""
+    rect = QtCore.QRectF(widget.rect())
+    if NATIVE_FRAME:
+        painter.fillRect(rect, fill)
+        return
+    painter.setRenderHint(QtGui.QPainter.Antialiasing)
+    radius = 0.0 if widget.isMaximized() else WINDOW_RADIUS + 2
+    painter.setPen(QtGui.QPen(border, 1))
+    painter.setBrush(fill)
+    painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
 MINI_GAP = 12
 _CURSORS = {1: Qt.SizeHorCursor, 2: Qt.SizeHorCursor, 4: Qt.SizeVerCursor, 8: Qt.SizeVerCursor,
             5: Qt.SizeFDiagCursor, 10: Qt.SizeFDiagCursor, 6: Qt.SizeBDiagCursor, 9: Qt.SizeBDiagCursor}

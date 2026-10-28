@@ -2,7 +2,7 @@
 
 from ..domain.settings import normalize_endpoint
 from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal, disable_max_accelerators
-from .frame import EDGE, WindowChrome, bounded_position
+from .frame import EDGE, WindowChrome, apply_native_frame, bounded_position, paint_window_shape, prepare_window
 from .toolbar import ToolbarPreview, ToolbarStyle
 from .widgets import Button, Dropdown, IconLabel, Switch, hbox, label, vbox
 
@@ -59,7 +59,7 @@ class SettingsPanel(QtWidgets.QWidget):
         QtWidgets.QWidget.__init__(self, parent)
         self.setObjectName("SettingsWindow")
         self.setWindowTitle("MaxPkg Settings")
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        prepare_window(self)
         self.manager_window = window
         self.runtime = window.runtime
         self.themes = window.themes
@@ -179,11 +179,12 @@ class SettingsPanel(QtWidgets.QWidget):
     def paintEvent(self, _event):
         theme = self.themes.manager
         painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        painter.setPen(QtGui.QPen(theme.color("textDisabled"), 1))
-        painter.setBrush(theme.color("surfacePrimary"))
-        painter.drawRoundedRect(QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
+        paint_window_shape(self, painter, theme.color("surfacePrimary"), theme.color("textDisabled"))
         painter.end()
+
+    def showEvent(self, event):
+        QtWidgets.QWidget.showEvent(self, event)
+        apply_native_frame(self, self.themes.color("textDisabled"))
 
     def mousePressEvent(self, event):
         if not self.chrome.mouse_press(event):

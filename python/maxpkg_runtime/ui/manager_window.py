@@ -6,14 +6,14 @@ Layout, texts and responsive breakpoints follow the HTML Manager 1.2.0 (docs/ORI
 from ..qt_compat import QShortcut, QtCore, QtGui, QtWidgets, Qt, Signal, exec_menu, is_valid
 from . import icons
 from .details import SINGLE_COLUMN, DetailsPage
-from .frame import EDGE, WindowChrome, bounded_position
+from .dialogs import confirm
+from .frame import EDGE, WindowChrome, apply_native_frame, bounded_position, paint_window_shape, prepare_window
 from .pages import WIDE_DISCOVER, DiscoverPage, InstalledPage
 from .settings_panel import SettingsPanel
 from .widgets import (Button, ClearableDropdown, IconButton, IconLabel, SearchBox, add_action, hbox, label,
                       themed_menu, vbox)
 
 MIN_WIDTH = 680
-WINDOW_RADIUS = 10.0
 HEADER_ICON_ONLY = 800  # 720 in the HTML Manager; the header now also holds the window buttons
 DISCOVER_SORTS = (("popular", "Popular"), ("newest", "Newest"), ("rating", "Rating"), ("downloads", "Downloads"),
                   ("name", "Name"))
@@ -155,7 +155,7 @@ class ManagerWindow(QtWidgets.QWidget):
         self.setObjectName("ManagerRoot")
         self.setWindowTitle("MaxPkg Manager")
         self.setAttribute(Qt.WA_StyledBackground, False)
-        self.setAttribute(Qt.WA_TranslucentBackground)  # rounded corners are painted in paintEvent
+        prepare_window(self)  # Windows 11: DWM rounds and shadows the window; older systems: painted shape
         self.runtime = runtime
         self.themes = themes
         self.images = images
@@ -466,23 +466,23 @@ class ManagerWindow(QtWidgets.QWidget):
 
     # --- painting ------------------------------------------------------------------
     def paintEvent(self, _event):
-        """Rounded window (square while maximised): the top level is translucent, we paint the shape."""
+        """Theme gradient. Windows 11 rounds the window and adds the shadow (frame.apply_native_frame)."""
         theme = self.themes.manager
         painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        radius = 0.0 if self.isMaximized() else WINDOW_RADIUS
-        shape = QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         gradient = QtGui.QLinearGradient(0, 0, self.width(), self.height())
         gradient.setColorAt(0.0, theme.color("backgroundGradientTop"))
         gradient.setColorAt(0.48, theme.color("surfaceSecondary"))
         gradient.setColorAt(1.0, theme.color("backgroundGradientBottom"))
-        painter.setPen(QtGui.QPen(theme.color("borderStrong"), 1))
-        painter.setBrush(QtGui.QBrush(gradient))
-        painter.drawRoundedRect(shape, radius, radius)
+        paint_window_shape(self, painter, QtGui.QBrush(gradient), theme.color("borderStrong"))
         painter.end()
+
+    def showEvent(self, event):
+        QtWidgets.QWidget.showEvent(self, event)
+        apply_native_frame(self, self.themes.color("borderStrong"))
 
     def apply_theme(self):
         self.setStyleSheet(self.themes.qss())
+        apply_native_frame(self, self.themes.color("borderStrong"))
         self.update()
         if self.isVisible():
             self.refresh_pages()
@@ -563,10 +563,10 @@ class ManagerWindow(QtWidgets.QWidget):
         package = self.runtime.package(guid)
         if package is None:
             return
-        answer = QtWidgets.QMessageBox.question(self, "MaxPkg", "Uninstall {}?".format(package.display_name),
-                                                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                                                QtWidgets.QMessageBox.No)
-        if answer == QtWidgets.QMessageBox.Yes and self.runtime.uninstall(guid) and self.tab == "details":
+        accepted = confirm(self, self.themes, "Uninstall {}?".format(package.display_name),
+                           "The package files, its 3ds Max buttons and menu entries will be removed. "
+                           "Your scenes are not changed.", "Uninstall", "trash-2", danger=True, icon_name="trash-2")
+        if accepted and self.runtime.uninstall(guid) and self.tab == "details":
             self.details_back()
 
     def package_menu(self, guid, anchor):
