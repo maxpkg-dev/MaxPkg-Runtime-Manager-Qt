@@ -42,8 +42,8 @@ its settings on first start (`settings.ini`, same format).
 ## The toolbar
 
 Top, bottom, left, right or floating; icon size, spacing, button style and second line (version or
-developer) are set in Settings → Toolbar. Buttons that do not fit go into the `»` menu. Hold **Alt** and
-drag to reorder; right-click for Run, Details, Update, Move, Hide and toolbar options.
+developer) are set in Settings → Toolbar. Buttons that do not fit go into the `»` menu. Drag a button to
+reorder it; right-click for Run, Details, Update, Move, Hide and toolbar options.
 
 ## Compatibility
 

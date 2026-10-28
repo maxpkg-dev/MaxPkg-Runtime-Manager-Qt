@@ -1,7 +1,7 @@
 """Markdown to Qt rich-text HTML for package descriptions written on maxpkg.dev.
 
 Covers what the site's editor produces and what GitHub-style descriptions use:
-- blocks: headings (# to ###### and setext), paragraphs with hard breaks, nested ordered/unordered lists,
+- blocks: headings (# to ###### and setext), paragraphs (every newline is a line break), nested ordered/unordered lists,
   task lists, block quotes, fenced code (``` and ~~~), horizontal rules and pipe tables with alignment;
 - inline: **bold**/__bold__, *italic*/_italic_, ~~strike~~, `code`, [links](url "title"), <autolinks>, bare
   URLs, ![images](url) (shown as links: QTextBrowser does not fetch remote images) and backslash escapes.
@@ -19,7 +19,7 @@ _CODE = re.compile(r"(`+)(.+?)\1", re.S)
 _IMAGE = re.compile(r"!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+\"[^\"]*\")?\s*\)")
 _LINK = re.compile(r"\[([^\]]+)\]\(\s*([^)\s]+)(?:\s+\"([^\"]*)\")?\s*\)")
 _AUTOLINK = re.compile(r"<((?:https?://|mailto:)[^>\s]+)>")
-_BARE_URL = re.compile(r"(?<![\"'=\w/])(https?://[^\s<]+[^\s<.,:;!?)\]'\"])")
+_BARE_URL = re.compile(r"(?<![\"'=\w/\x00])(https?://[^\s<]+[^\s<.,:;!?)\]'\"])")
 _BOLD = re.compile(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1")
 _ITALIC_STAR = re.compile(r"(?<![*\w])\*(?=\S)(.+?)(?<=\S)\*(?![*\w])")
 _ITALIC_UNDERSCORE = re.compile(r"(?<![_\w])_(?=\S)(.+?)(?<=\S)_(?![_\w])")
@@ -77,16 +77,18 @@ def inline(text):
 
 
 def _paragraph_html(lines):
-    """Lines of one paragraph: soft breaks become spaces, two trailing spaces or a backslash break the line."""
+    """Lines of one paragraph, each on its own line, as on maxpkg.dev.
+
+    The runtime API drops blank lines from descriptions, so a single newline is often the author's paragraph
+    break: joining such lines with spaces would run "Website: ... User Guide: ..." into one line.
+    """
     parts = []
-    for position, line in enumerate(lines):
-        last = position == len(lines) - 1
-        hard = not last and (line.endswith("  ") or line.rstrip().endswith("\\"))
+    for line in lines:
         content = line.strip()
-        if hard and content.endswith("\\"):
-            content = content[:-1]
-        parts.append(inline(content) + ("<br>" if hard else ("" if last else " ")))
-    return "".join(parts)
+        if content.endswith("\\") and not content.endswith("\\\\"):
+            content = content[:-1].rstrip()  # backslash hard break: the line break is already there
+        parts.append(inline(content))
+    return "<br>".join(parts)
 
 
 def _split_row(line):

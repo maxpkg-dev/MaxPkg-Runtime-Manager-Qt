@@ -24,6 +24,16 @@ BRAND_WIDTH = 96
 GRIP = 17
 
 
+# Toolbar look choices offered in the maxpkg button menu: (setting, title, icon, ((value, text), ...)).
+LOOK_CHOICES = (
+    ("toolbar_density", "Spacing", "move-horizontal", (("regular", "Regular"), ("compact", "Compact"))),
+    ("toolbar_icon_size", "Icon size", "maximize", (("small", "Small"), ("medium", "Medium"), ("large", "Large"))),
+    ("toolbar_button_size", "Button style", "rectangle-horizontal",
+     (("icon", "Icons only"), ("small", "Narrow"), ("medium", "Medium"), ("large", "Wide"))),
+    ("toolbar_subtitle_mode", "Second line", "text", (("none", "None"), ("version", "Version"), ("developer", "Developer"))),
+)
+
+
 class ToolbarStyle:
     """Geometry derived from settings, shared by the real toolbar and the Settings preview."""
 
@@ -74,7 +84,7 @@ class ToolbarItem:
         tooltip = package.display_name + " " + package.version
         if package.update_available:
             tooltip += "\nUpdate available: " + package.latest_version
-        tooltip += "\nHold Alt and drag to reorder"
+        tooltip += "\nDrag to reorder"
         return cls(package.guid, title, subtitle, tooltip, package.icon_file or package.icon_url, package.initials,
                    package.update_available)
 
@@ -93,11 +103,13 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         self.brand = brand
         self.brand_icon = brand_icon
         self.badge_count = 0
-        self.locked = False  # Toolbar lock: no Alt + drag (set by ToolbarController)
+        self.locked = False  # Toolbar lock: no drag reorder (set by ToolbarController)
         self.setFocusPolicy(Qt.NoFocus)
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_Hover)
         self._dragging = False
+        self._press_point = None  # global point of a plain press that may still become a drag
+        self._cancelled = False  # the current press was dragged on a locked toolbar
         if images is not None and not brand:
             images.ready.connect(self._on_image)
         self.apply(item, style, toolbar_theme)
@@ -236,27 +248,54 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         painter.setPen(self.theme.color("updateBadgeText"))
         painter.drawText(rect, Qt.AlignCenter, text)
 
-    # --- Alt + drag reorder -------------------------------------------------------
+    # --- drag reorder ---------------------------------------------------------------
+    # A press that moves past the drag distance reorders the button, like a divider; a press that stays put is a
+    # click. Alt + press still starts the drag at once (the shortcut the earlier versions taught).
     def mousePressEvent(self, event):
-        if not self.brand and event.button() == Qt.LeftButton and event.modifiers() & Qt.AltModifier:
-            if self.locked:
-                show_locked_hint(event)
+        self._press_point = None
+        self._cancelled = False
+        if not self.brand and event.button() == Qt.LeftButton:
+            if event.modifiers() & Qt.AltModifier:
+                if self.locked:
+                    show_locked_hint(event)
+                else:
+                    self._start_drag()
                 event.accept()
                 return
-            self._dragging = True
-            self.setCursor(Qt.ClosedHandCursor)
-            self.update()
-            event.accept()
-            return
+            self._press_point = event_global_pos(event)
         QtWidgets.QAbstractButton.mousePressEvent(self, event)
 
+    def _start_drag(self):
+        self._dragging = True
+        self.setDown(False)  # the release after a drag is not a click
+        self.setCursor(Qt.ClosedHandCursor)
+        self.update()
+
     def mouseMoveEvent(self, event):
+        point = self._press_point
+        if not self._dragging and point is not None:
+            if (event_global_pos(event) - point).manhattanLength() >= QtWidgets.QApplication.startDragDistance():
+                self._press_point = None
+                if self.locked:
+                    show_locked_hint(event)
+                    self._cancelled = True  # a drag on a locked toolbar is neither a move nor a click
+                    self.setDown(False)
+                else:
+                    self._start_drag()
+        if self._cancelled:
+            return
         if self._dragging:
             self.alt_drag.emit(self, event_global_pos(event))
             return
         QtWidgets.QAbstractButton.mouseMoveEvent(self, event)
 
     def mouseReleaseEvent(self, event):
+        self._press_point = None
+        if self._cancelled:
+            self._cancelled = False
+            self.setDown(False)
+            event.accept()
+            return
         if self._dragging:
             self._dragging = False
             self.setCursor(Qt.PointingHandCursor)
@@ -276,7 +315,7 @@ def show_locked_hint(event):
 
 class ToolbarDivider(QtWidgets.QWidget):
     """A divider between toolbar buttons: a thin rounded line across the line of buttons. It has no click, so a
-    plain drag moves it (Alt + drag works too, like the buttons); its menu moves or removes it."""
+    plain drag moves it at once (buttons start a drag after the drag distance); its menu moves or removes it."""
 
     alt_drag = Signal(object, object)
     THICKNESS = 9
@@ -298,20 +337,27 @@ class ToolbarDivider(QtWidgets.QWidget):
         self.update()
 
     def paintEvent(self, _event):
+        """Etched like 3ds Max's own toolbar separators: a dark and a light 1 px line side by side, half the button
+        height, so it reads on any toolbar color. Under the mouse or while dragged both lines brighten."""
         painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        color = QtGui.QColor(self.theme.color("buttonSecondaryText"))
-        color.setAlphaF(0.75 if (self.underMouse() or self._dragging) else 0.38)
-        pen = QtGui.QPen(color, 1.5)
-        pen.setCapStyle(Qt.RoundCap)
-        painter.setPen(pen)
-        middle = QtCore.QPointF(self.width() / 2.0, self.height() / 2.0)
-        if self.style_info.vertical:
-            reach = self.width() * 0.32
-            painter.drawLine(QtCore.QPointF(middle.x() - reach, middle.y()), QtCore.QPointF(middle.x() + reach, middle.y()))
-        else:
-            reach = self.height() * 0.32
-            painter.drawLine(QtCore.QPointF(middle.x(), middle.y() - reach), QtCore.QPointF(middle.x(), middle.y() + reach))
+        active = self.underMouse() or self._dragging
+        background = QtGui.QColor(self.theme.color("toolbarBackground"))
+        dark = QtGui.QColor(self.theme.color("toolbarBorder"))
+        # The light line moves the toolbar color toward white (lighter() barely changes very dark themes).
+        lift = 0.36 if active else 0.24
+        light = QtGui.QColor(*(int(channel + (255 - channel) * lift) for channel in
+                               (background.red(), background.green(), background.blue())))
+        dark = dark.darker(150 if active else 125)
+        vertical = self.style_info.vertical
+        across = self.width() if vertical else self.height()
+        reach = int(round(across * 0.25))  # the lines cover half of the button height
+        middle_across = across // 2
+        middle_along = (self.height() if vertical else self.width()) // 2 - 1
+        for offset, color in ((0, dark), (1, light)):
+            if vertical:
+                painter.fillRect(middle_across - reach, middle_along + offset, 2 * reach, 1, color)
+            else:
+                painter.fillRect(middle_along + offset, middle_across - reach, 1, 2 * reach, color)
         painter.end()
 
     def mousePressEvent(self, event):
@@ -383,6 +429,61 @@ class ButtonStrip(QtWidgets.QWidget):
         return len(self.buttons)
 
 
+class InsertionLine(QtWidgets.QWidget):
+    """Where a dragged button will land on the docked toolbar: a glowing accent bar across the line of buttons
+    with a round dot at each end, the same marker the Manager shows between Installed cards."""
+
+    ACCENT = "#3af1c5"
+    WIDTH = 12  # the glow; the bar itself is 2.5 px in the middle
+    DOT = 3.5  # radius of the end dots
+
+    def __init__(self, parent):
+        QtWidgets.QWidget.__init__(self, parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.vertical_toolbar = False  # the bar runs across the toolbar: horizontal on a vertical toolbar
+        self.ring = QtGui.QColor("#444444")
+        self.hide()
+
+    def show_at(self, position, start, length, vertical_toolbar, ring):
+        """`position`: the gap along the toolbar; `start`/`length`: the span of the buttons across it."""
+        self.vertical_toolbar = vertical_toolbar
+        self.ring = ring
+        half = self.WIDTH // 2
+        if vertical_toolbar:
+            self.setGeometry(start, position - half, length, self.WIDTH)
+        else:
+            self.setGeometry(position - half, start, self.WIDTH, length)
+        self.raise_()
+        self.show()
+        self.update()
+
+    def paintEvent(self, _event):
+        accent = QtGui.QColor(self.ACCENT)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        if self.vertical_toolbar:  # paint as for a horizontal toolbar, rotated a quarter turn
+            painter.translate(self.width(), 0)
+            painter.rotate(90)
+        across, along = (self.height(), self.width()) if self.vertical_toolbar else (self.width(), self.height())
+        middle = across / 2.0
+        glow = QtGui.QLinearGradient(0, 0, across, 0)
+        for stop, alpha in ((0.0, 0.0), (0.5, 0.3), (1.0, 0.0)):
+            color = QtGui.QColor(accent)
+            color.setAlphaF(alpha)
+            glow.setColorAt(stop, color)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QtGui.QBrush(glow))
+        painter.drawRoundedRect(QtCore.QRectF(0, self.DOT, across, along - 2 * self.DOT), middle, middle)
+        top, bottom = self.DOT + 1.0, along - self.DOT - 1.0
+        painter.setBrush(accent)
+        painter.drawRoundedRect(QtCore.QRectF(middle - 1.25, top, 2.5, bottom - top), 1.25, 1.25)
+        # Round ends: an accent dot with a ring of the toolbar color, so they read on buttons and gaps alike.
+        painter.setPen(QtGui.QPen(self.ring, 1.25))
+        for y in (top, bottom):
+            painter.drawEllipse(QtCore.QPointF(middle, y), self.DOT, self.DOT)
+        painter.end()
+
+
 class DockedStrip:
     """Buttons of the docked QToolBar, one QWidgetAction each, so Qt's own overflow chevron
     can move individual buttons into its popup when the toolbar line is too short."""
@@ -394,9 +495,7 @@ class DockedStrip:
         self.style_info = None
         self._actions = {}
         self._order = []
-        self.indicator = QtWidgets.QFrame(toolbar)
-        self.indicator.setStyleSheet("background: #3af1c5;")
-        self.indicator.hide()
+        self.indicator = InsertionLine(toolbar)
 
     def _action(self, widget):
         action = self._actions.get(id(widget))
@@ -442,16 +541,15 @@ class DockedStrip:
         vertical = self.toolbar.orientation() == Qt.Vertical
         if index < len(self.buttons):
             reference = self.buttons[index].geometry()
-            offset = reference.top() - 2 if vertical else reference.left() - 2
+            offset = reference.top() - 1 if vertical else reference.left() - 1
         else:
             reference = visible[-1].geometry()
-            offset = reference.bottom() + 1 if vertical else reference.right() + 1
+            offset = reference.bottom() + 2 if vertical else reference.right() + 2
+        ring = QtGui.QColor(visible[0].theme.color("toolbarBackground"))
         if vertical:
-            self.indicator.setGeometry(reference.left(), offset, reference.width(), 2)
+            self.indicator.show_at(offset, reference.left(), reference.width(), True, ring)
         else:
-            self.indicator.setGeometry(offset, reference.top(), 2, reference.height())
-        self.indicator.raise_()
-        self.indicator.show()
+            self.indicator.show_at(offset, reference.top(), reference.height(), False, ring)
 
     def hide_indicator(self):
         self.indicator.hide()
@@ -924,12 +1022,30 @@ class ToolbarController(QtCore.QObject):
         add_action(menu, "Open Manager", lambda: self.open_manager(""), self.themes, "package")
         add_action(menu, "Check Updates", lambda: self.runtime.check_updates(True), self.themes, "refresh-cw")
         add_action(menu, "Toolbar settings...", lambda: self.open_manager("settings:toolbar"), self.themes, "settings")
+        settings = self.runtime.settings
+        menu.addSeparator()  # the toolbar's look: where it sits and how its buttons appear
         dock = themed_submenu(menu, "Position", self.themes, "panel-top")
-        current = self.runtime.settings.toolbar_dock_position
+        current = settings.toolbar_dock_position
         for key, text in (("top", "Top"), ("bottom", "Bottom"), ("left", "Left"), ("right", "Right"),
                           ("floatinghorizontal", "Floating Horizontal"), ("floatingvertical", "Floating Vertical")):
             add_choice_action(dock, text, current == key, lambda _checked=False, value=key: self.set_position(value),
                               self.themes)
+        # The same choices as Settings > Toolbar, in the same order.
+        style = self.strip.style_info
+        forced_icons = style is not None and style.icon_only and settings.toolbar_button_size != "icon"
+        for attribute, title, icon_name, choices in LOOK_CHOICES:
+            submenu = themed_submenu(menu, title, self.themes, icon_name)
+            current = getattr(settings, attribute)
+            for key, text in choices:
+                add_choice_action(submenu, text, current == key,
+                                  lambda _checked=False, name=attribute, value=key: self._set_look(name, value),
+                                  self.themes)
+            # Icon-only buttons (side and floating toolbars, or Icons only) have no width or second line.
+            unused = ((attribute == "toolbar_button_size" and forced_icons) or
+                      (attribute == "toolbar_subtitle_mode" and style is not None and style.icon_only))
+            if unused:
+                submenu.menuAction().setEnabled(False)
+                submenu.menuAction().setText(title + (" (top or bottom only)" if forced_icons else " (text buttons only)"))
         menu.addSeparator()
         self._add_lock_action(menu)
         add_action(menu, "Hide toolbar", self._hide_toolbar, self.themes, "eye-off")
@@ -954,6 +1070,19 @@ class ToolbarController(QtCore.QObject):
         if self.runtime.save_settings("toolbar"):
             action = ("Undo", "undo-2", lambda: self.set_position(previous, undo=False)) if undo else None
             self.feedback("The toolbar is now {}.".format(self.POSITION_NAMES.get(position, position)), action=action)
+
+    def _set_look(self, attribute, value, undo=True):
+        """A Spacing / Icon size / Button style / Second line choice from the toolbar menu; saved at once like
+        Settings > Toolbar, with Undo."""
+        settings = self.runtime.settings
+        previous = getattr(settings, attribute)
+        if value == previous:
+            return
+        setattr(settings, attribute, value)
+        if self.runtime.save_settings("toolbar"):
+            title, names = [(title, dict(choices)) for name, title, _icon, choices in LOOK_CHOICES if name == attribute][0]
+            action = ("Undo", "undo-2", lambda: self._set_look(attribute, previous, undo=False)) if undo else None
+            self.feedback("{}: {}.".format(title, names.get(value, value).lower()), action=action)
 
     def _hide_toolbar(self):
         self.runtime.settings.toolbar_visible = False
@@ -1034,7 +1163,7 @@ class ToolbarController(QtCore.QObject):
                 self.feedback("The toolbar is locked.\nButtons and dividers keep their places.", "info",
                               action=("Unlock", "lock-open", lambda: self._set_locked(False)))
             else:
-                self.feedback("The toolbar is unlocked.\nHold Alt and drag to arrange its buttons.",
+                self.feedback("The toolbar is unlocked.\nDrag its buttons to arrange them.",
                               action=("Lock Again", "lock", lambda: self._set_locked(True)))
 
     def _divider_menu(self, divider):

@@ -841,27 +841,39 @@ class EdgeFade(QtWidgets.QWidget):
 
 class Shimmer(QtWidgets.QWidget):
     """A light diagonal band that sweeps across `target` every few seconds to draw the eye (same as TerraScoop's
-    Show Layers button). Painted over the button, clipped to its rounded corners; mouse events pass through."""
+    Show Layers button). Painted over the button, clipped to its rounded corners; mouse events pass through.
+
+    With `hover_area` (a card) the band only sweeps while the pointer is over that area: the first sweep starts
+    on entering, and a sweep in progress finishes after leaving instead of vanishing mid-way."""
 
     SWEEP_MS = 900
     PAUSE_MS = 2600
     SLANT = 0.45  # the band leans this much (horizontal per vertical)
 
-    def __init__(self, target, radius=10):
+    def __init__(self, target, radius=10, hover_area=None):
         QtWidgets.QWidget.__init__(self, target)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.radius = radius
+        self._hover_area = hover_area
+        self._hovered = hover_area is None
+        self._finishing_cycle = -1  # sweep cycle that still plays to its end after the pointer left
         self._clock = QtCore.QElapsedTimer()
         self._clock.start()
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._tick)
         target.installEventFilter(self)
+        if hover_area is not None:
+            hover_area.installEventFilter(self)
+            self._hovered = hover_area.underMouse()
         self._follow()
 
     def _tick(self):
         """Frames only while the band sweeps; in the pause one wake-up for the next sweep (many cards share it)."""
         self.update()
+        if not self._hovered and self.phase() is None:
+            self._timer.stop()  # left the card and the last sweep has finished
+            return
         elapsed = self._clock.elapsed() % (self.SWEEP_MS + self.PAUSE_MS)
         self._timer.setInterval(33 if elapsed < self.SWEEP_MS else self.SWEEP_MS + self.PAUSE_MS - elapsed)
 
@@ -871,19 +883,36 @@ class Shimmer(QtWidgets.QWidget):
             self.setGeometry(target.rect())
             self.raise_()
             self.show()
-            self._timer.start()
+            if self._hovered:
+                self._timer.start()
         else:
             self._timer.stop()
             self.hide()
 
     def eventFilter(self, watched, event):
-        if event.type() in (QtCore.QEvent.Show, QtCore.QEvent.Hide, QtCore.QEvent.Resize):
+        kind = event.type()
+        if watched is self._hover_area:
+            if kind == QtCore.QEvent.Enter and not self._hovered:
+                self._hovered = True
+                if self.phase() is None:
+                    self._clock.restart()  # start a sweep now, unless the previous one is still running
+                self._timer.setInterval(33)
+                self._timer.start()
+            elif kind == QtCore.QEvent.Leave and self._hovered:
+                in_sweep = self.phase() is not None
+                self._hovered = False
+                cycle = self._clock.elapsed() // (self.SWEEP_MS + self.PAUSE_MS)
+                self._finishing_cycle = cycle if in_sweep else -1
+        elif kind in (QtCore.QEvent.Show, QtCore.QEvent.Hide, QtCore.QEvent.Resize):
             self._follow()
         return False
 
     def phase(self):
-        """0..1 while the band sweeps, None in the pause."""
-        elapsed = self._clock.elapsed() % (self.SWEEP_MS + self.PAUSE_MS)
+        """0..1 while the band sweeps, None in the pause (and after the last sweep once the pointer left)."""
+        total = self._clock.elapsed()
+        if not self._hovered and total // (self.SWEEP_MS + self.PAUSE_MS) != self._finishing_cycle:
+            return None
+        elapsed = total % (self.SWEEP_MS + self.PAUSE_MS)
         return elapsed / float(self.SWEEP_MS) if elapsed < self.SWEEP_MS else None
 
     def paintEvent(self, _event):

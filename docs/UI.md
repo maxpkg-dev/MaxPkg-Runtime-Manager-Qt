@@ -49,7 +49,8 @@ Card grids compute their column count from the width (1–4) instead of the fixe
 - Floating: frameless tool window with the dotted grip of the HTML toolbar; clamped to the work area.
 - Never rebuilt: buttons are added, removed, reordered and restyled individually.
 - Buttons paint icon, name, version/developer line, update dot; `maxpkg` button shows the update count.
-- Alt + drag reorders (live in floating mode; insertion line when docked). Right click: Run, Details,
+- Dragging a button reorders it once the press moves past the drag distance; a press that stays put is a click
+  (Alt + drag still starts at once). Live in floating mode; insertion line when docked. Right click: Run, Details,
   Update, Move Left/Right, Hide from Toolbar, Toolbar settings; on `maxpkg`: Open Manager, Check Updates,
   Position, Hide toolbar.
 - Never takes keyboard focus (Max shortcuts keep working).

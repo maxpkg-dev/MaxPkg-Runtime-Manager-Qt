@@ -3,7 +3,7 @@
 from ..domain.packages import compact_number
 from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal, is_valid
 from ..services.images import rounded
-from .widgets import Badge, Button, ElidedLabel, ElidedText, FlowRow, IconButton, IconLabel, hbox, label, vbox
+from .widgets import Badge, Button, ElidedLabel, ElidedText, FlowRow, IconButton, IconLabel, Shimmer, hbox, label, vbox
 
 FULL_CARD_HEIGHT = 248
 COMPACT_CARD_HEIGHT = 128
@@ -52,7 +52,10 @@ class _CardBase(QtWidgets.QFrame):
         self.package = package
         self.host = host
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("Open package details")
+
+    def _shine(self, button):
+        """The card's main action shimmers while the pointer is over the card."""
+        button.shimmer = Shimmer(button, radius=10, hover_area=self)
 
     def _heading(self, show_hidden=False):
         """Icon + title + 'v1.2 · developer' as one clickable area that opens Details."""
@@ -110,10 +113,12 @@ class InstalledCard(_CardBase):
         if updates_view and package.update_available:
             update = Button("Update to " + package.latest_version, "download", "success", themes, compact=True)
             update.clicked.connect(lambda: host.update_package(package.guid))
+            self._shine(update)
             actions.addWidget(update)
         else:
             run = Button("Run", "play", "primary", themes, compact=True)
             run.clicked.connect(lambda: host.run(package.guid))
+            self._shine(run)
             actions.addWidget(run)
         actions.addStretch(1)
         more = IconButton("ellipsis", "More actions", themes)
@@ -236,6 +241,7 @@ class RemoteCard(_CardBase):
         else:
             button = Button("Install", "download", "primary", themes, compact=True)
             button.clicked.connect(lambda: host.install(package.guid))
+            self._shine(button)
         actions.addWidget(button)
         actions.addStretch(1)
         layout.addLayout(actions)

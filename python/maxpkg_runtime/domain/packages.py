@@ -255,6 +255,14 @@ def normalized_order(packages, order):
     return result
 
 
+def with_brand_divider(order):
+    """The order with a divider first, so the maxpkg button stands apart from the packages."""
+    order = list(order)
+    if not order or not is_divider(order[0]):
+        order.insert(0, DIVIDER)
+    return order
+
+
 def merge_visible_order(saved_order, visible_new_order, visible_guids):
     """Apply a reordering of the visible subset while keeping hidden packages in their slots.
 
@@ -301,5 +309,5 @@ def compact_number(value):
 
 
 __all__ = ["Package", "ChangelogEntry", "Screenshot", "scan", "read_manifest", "is_newer", "compatible",
-           "ordered_for_toolbar", "normalized_order", "merge_visible_order", "compact_number", "to_float", "DIVIDER",
+           "ordered_for_toolbar", "normalized_order", "with_brand_divider", "merge_visible_order", "compact_number", "to_float", "DIVIDER",
            "is_divider", "toolbar_entries"]

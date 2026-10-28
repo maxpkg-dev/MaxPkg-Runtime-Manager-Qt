@@ -19,6 +19,8 @@ _FIELDS = (
     ("toolbar_order", "Toolbar", "Order", "list", (), None),
     ("toolbar_visible", "Toolbar", "Visible", "bool", True, None),
     ("toolbar_locked", "Toolbar", "Locked", "bool", False, None),  # buttons and dividers keep their places
+    # The divider after the maxpkg button is added once; a user who removes or moves it keeps that choice.
+    ("toolbar_brand_divider_added", "Toolbar", "BrandDividerAdded", "bool", False, None),
     ("toolbar_title_mode", "Toolbar", "TitleMode", "choice", "packageName", ("packageName", "buttonName")),
     ("toolbar_subtitle_mode", "Toolbar", "SubtitleMode", "choice", "version", ("none", "version", "developer")),
     ("toolbar_button_size", "Toolbar", "ButtonSize", "choice", "medium", ("icon", "small", "medium", "large")),

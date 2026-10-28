@@ -13,7 +13,7 @@ import uuid
 
 from ..domain import api
 from ..domain.packages import (DIVIDER, Package, compatible, is_divider, is_newer, merge_visible_order,
-                               normalized_order, ordered_for_toolbar, scan, toolbar_entries)
+                               normalized_order, ordered_for_toolbar, scan, toolbar_entries, with_brand_divider)
 from ..domain.settings import load_or_migrate
 from ..qt_compat import QtCore, Signal
 from . import log, max_api, network
@@ -142,6 +142,10 @@ class Runtime(QtCore.QObject):
         self.packages = scan(self.paths.package_roots(self.settings.package_roots),
                              lambda message: log.warning("scanner", message))
         order = normalized_order(self.packages, self.settings.toolbar_order)
+        if self.packages and not self.settings.toolbar_brand_divider_added:
+            order = with_brand_divider(order)  # once: later the user may move or remove it
+            self.settings.toolbar_brand_divider_added = True
+            self.settings.toolbar_order = []  # forces the save below
         if [guid.lower() for guid in order] != [guid.lower() for guid in self.settings.toolbar_order]:
             self.settings.toolbar_order = order
             self.save_settings("toolbar")
@@ -232,8 +236,8 @@ class Runtime(QtCore.QObject):
         return ok
 
     def reset_toolbar_order(self):
-        self.settings.toolbar_order = [package.guid for package in
-                                       sorted(self.packages, key=lambda item: (item.toolbar_order, item.name.lower()))]
+        self.settings.toolbar_order = with_brand_divider(
+            package.guid for package in sorted(self.packages, key=lambda item: (item.toolbar_order, item.name.lower())))
         ok = self.save_settings("toolbar")
         self.packages_changed.emit()
         return ok

@@ -8,7 +8,8 @@ import unittest
 from maxpkg_runtime.domain import api, markdown
 from maxpkg_runtime.domain.ini import IniDocument
 from maxpkg_runtime.domain.packages import (DIVIDER, Package, compact_number, is_newer, merge_visible_order,
-                                            normalized_order, ordered_for_toolbar, scan, toolbar_entries)
+                                            normalized_order, ordered_for_toolbar, scan, toolbar_entries,
+                                            with_brand_divider)
 from maxpkg_runtime.domain.settings import Settings, load_or_migrate, normalize_endpoint
 
 
@@ -110,6 +111,12 @@ class PackageTests(unittest.TestCase):
         entries = toolbar_entries(packages, saved, lambda guid: guid == "B")
         self.assertEqual([entry if entry == DIVIDER else entry.guid for entry in entries], ["A", DIVIDER, DIVIDER, "C"])
 
+    def test_brand_divider(self):
+        # A divider after the maxpkg button by default, never doubled.
+        self.assertEqual(with_brand_divider(["A", "B"]), [DIVIDER, "A", "B"])
+        self.assertEqual(with_brand_divider([DIVIDER, "A"]), [DIVIDER, "A"])
+        self.assertEqual(with_brand_divider([]), [DIVIDER])
+
 
 class ApiTests(unittest.TestCase):
     CATALOG = ("[catalog]\nPage=1\nTotalPages=2\nTotal=30\nTotalPackages=21\n"
@@ -183,6 +190,14 @@ class MarkdownTests(unittest.TestCase):
         self.assertIn('<a href="https://x.test/a.png">shot</a>', html)
         self.assertIn("<blockquote><p>quoted <i>text</i></p></blockquote>", html)
         self.assertIn("<pre>&lt;b&gt;raw&lt;/b&gt;</pre>", html)
+
+    def test_single_newlines_break_lines(self):
+        # The runtime API drops blank lines, so each line of a description stays on its own line, as on the site.
+        html = markdown.to_html("### Links\n**Website:** [https://a.test/](https://a.test/)\n**Guide:** [Guide](https://b.test/)\n"
+                                "### Compatibility\n3ds Max 2020 and newer\nV-Ray 5, 6, and 7\nwrapped with a backslash\\\nend")
+        self.assertIn('<p><b>Website:</b> <a href="https://a.test/">https://a.test/</a><br><b>Guide:</b> '
+                      '<a href="https://b.test/">Guide</a></p>', html)
+        self.assertIn("<p>3ds Max 2020 and newer<br>V-Ray 5, 6, and 7<br>wrapped with a backslash<br>end</p>", html)
 
 
 if __name__ == "__main__":
