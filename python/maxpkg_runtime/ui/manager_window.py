@@ -17,7 +17,7 @@ from .frame import (EDGE, WindowChrome, apply_native_frame, bounded_position, gl
 from .pages import WIDE_DISCOVER, DiscoverPage, InstalledPage
 from .settings_panel import SettingsPanel
 from .widgets import (BrandLogo, Button, ClearableDropdown, IconButton, IconLabel, SearchBox, SlideView, add_action,
-                      hbox, label, themed_menu, vbox)
+                      add_danger_action, add_menu_title, hbox, label, themed_menu, vbox)
 
 MIN_WIDTH = 680
 HEADER_ICON_ONLY = 800  # 720 in the HTML Manager; the header now also holds the window buttons
@@ -98,13 +98,19 @@ class Toast(QtWidgets.QFrame):
             body = label(lines[1].strip(), "ToastBody", wrap=True)
             body.setFixedWidth(text_width)
             texts.addWidget(body)
-        if action is not None:
-            action_text, action_icon, callback = action
-            button = Button(action_text, action_icon, "primary", themes, compact=True)
-            button.clicked.connect(lambda: (callback(), self._expire()))
+        # `action`: one (label, icon, callback) or a list of them; the first is the main (primary) button.
+        actions = [action] if isinstance(action, tuple) else list(action or [])
+        if actions:
+            buttons = hbox(spacing=8)
+            for position, (action_text, action_icon, callback) in enumerate(actions):
+                button = Button(action_text, action_icon, "primary" if position == 0 else "default", themes,
+                                compact=True)
+                button.clicked.connect(lambda _checked=False, run=callback: (self._expire(), run()))
+                buttons.addWidget(button)
+            buttons.addStretch(1)
             texts.addSpacing(6)
-            texts.addWidget(button, 0, Qt.AlignLeft)
-        if len(lines) > 1 or action is not None:
+            texts.addLayout(buttons)
+        if len(lines) > 1 or actions:
             texts.addStretch(1)
         close = IconButton("x", "Close", themes)
         close.setObjectName("ToastClose")
@@ -115,12 +121,13 @@ class Toast(QtWidgets.QFrame):
         row.addWidget(disc, 0, Qt.AlignTop)
         row.addLayout(texts, 1)
         row.addWidget(close, 0, Qt.AlignTop)
-        if (len(lines) == 1 or not lines[1].strip()) and action is None:
+        if (len(lines) == 1 or not lines[1].strip()) and not actions:
             row.setAlignment(texts, Qt.AlignVCenter)  # a single line sits beside the icon's middle
         self.setLayout(row)
         self.setFixedWidth(self.WIDTH)
         self.setAttribute(Qt.WA_Hover)
-        self._lifetime = self.LIFETIME_MS.get(kind, self.DEFAULT_LIFETIME_MS)
+        # An offer stays longer: there is something to decide.
+        self._lifetime = self.LIFETIME_MS.get(kind, self.DEFAULT_LIFETIME_MS) + (3000 if actions else 0)
         self._left = float(self._lifetime)
         self._clock = QtCore.QElapsedTimer()
         self._clock.start()
@@ -1034,26 +1041,43 @@ class ManagerWindow(QtWidgets.QWidget):
         if package is None:
             return
         developer = self.runtime.settings.developer_mode
+        themes = self.themes
         menu = themed_menu(self)
-        add_action(menu, "Run", lambda: self.run(guid))
+        # The same header as the toolbar's menu: the script, its byline and (when set) a link to its Donate page.
+        byline = "v" + package.version + (" · " + package.developer if package.developer else "")
+        purchase = package.purchase_label() if package.purchase_url else ""
+        add_menu_title(menu, package.display_name, themes, pixmap=self.images.get(package.icon_file or package.icon_url),
+                       icon_name="package", subtitle=byline,
+                       on_click=(lambda: self.open_purchase(guid)) if package.purchase_url else None,
+                       link_icon="heart" if purchase.lower() in ("donate", "support", "sponsor") else "shopping-cart",
+                       link_tip="{}: opens the author's page in your browser".format(purchase or "Donate"))
+        add_action(menu, "Run", lambda: self.run(guid), themes, "play")
         if self.tab == "updates" and package.update_available:
-            add_action(menu, "Update to " + package.latest_version, lambda: self.update_package(guid))
-        add_action(menu, "Details", lambda: self.open_details(guid))
-        if developer:
-            add_action(menu, "Open Folder", lambda: self.runtime.open_folder(guid))
+            add_action(menu, "Update to " + package.latest_version, lambda: self.update_package(guid), themes,
+                       "download", "iconSuccess")
+        add_action(menu, "Details", lambda: self.open_details(guid), themes, "info")
         if package.documentation_url:
-            add_action(menu, "Help", lambda: self.runtime.open_link(package, "documentation"))
+            add_action(menu, "Help", lambda: self.runtime.open_link(package, "documentation"), themes, "book-open")
+        if developer:
+            add_action(menu, "Open Folder", lambda: self.runtime.open_folder(guid), themes, "folder-open")
+        menu.addSeparator()
         on_toolbar = self.runtime.is_on_toolbar(package)
         add_action(menu, "Hide from Toolbar" if on_toolbar else "Show in Toolbar",
-                   lambda: self.set_on_toolbar(guid, not on_toolbar))
+                   lambda: self.set_on_toolbar(guid, not on_toolbar), themes, "eye-off" if on_toolbar else "eye")
         if developer:
             menu.addSeparator()
-            add_action(menu, "Copy GUID", lambda: self.copy_text(package.guid, "GUID copied."))
-            add_action(menu, "Copy Path", lambda: self.copy_text(package.install_path, "Path copied."))
+            add_action(menu, "Copy GUID", lambda: self.copy_text(package.guid, "GUID copied."), themes, "copy")
+            add_action(menu, "Copy Path", lambda: self.copy_text(package.install_path, "Path copied."), themes, "copy")
         menu.addSeparator()
-        add_action(menu, "Uninstall", lambda: self.uninstall(guid), self.themes, "trash-2", "iconDanger")
+        add_danger_action(menu, "Uninstall", lambda: self.uninstall(guid), themes)
         exec_menu(menu, anchor.mapToGlobal(QtCore.QPoint(0, anchor.height() + 4)))
         menu.deleteLater()
+
+    def open_purchase(self, guid):
+        package = self.runtime.package(guid)
+        if package is not None and self.runtime.open_link(package, "purchase"):
+            self.notify("Opened the {} page of {} in your browser.\nThank you for supporting the author.".format(
+                package.purchase_label(), package.display_name), "success")
 
     def set_on_toolbar(self, guid, visible):
         package = self.runtime.package(guid)

@@ -833,11 +833,13 @@ class ToolbarController(QtCore.QObject):
                     current = order.index(button)
                     order.pop(current)
                     order.insert(target - 1 if target > current else target, button)
+                    undo = self._undo_order()  # the saved order changes only now
                     if self.runtime.set_toolbar_order([widget.item.guid for widget in order]):
-                        self.feedback("Moved {}.".format(self._entry_name(button.item.guid)))
+                        self.feedback("Moved {}.".format(self._entry_name(button.item.guid)), action=undo)
             elif target:
+                undo = self._undo_order()
                 if self.runtime.set_toolbar_order([widget.item.guid for widget in strip.buttons]):
-                    self.feedback("Moved {}.".format(self._entry_name(button.item.guid)))
+                    self.feedback("Moved {}.".format(self._entry_name(button.item.guid)), action=undo)
             return
         target = strip.index_at(global_point)
         current = strip.buttons.index(button)
@@ -945,10 +947,14 @@ class ToolbarController(QtCore.QObject):
                       "floatinghorizontal": "a floating horizontal bar",
                       "floatingvertical": "a floating vertical bar"}
 
-    def set_position(self, position):
+    def set_position(self, position, undo=True):
+        previous = self.runtime.settings.toolbar_dock_position
+        if position == previous:
+            return
         self.runtime.settings.toolbar_dock_position = position
         if self.runtime.save_settings("toolbar"):
-            self.feedback("The toolbar is now {}.".format(self.POSITION_NAMES.get(position, position)))
+            action = ("Undo", "undo-2", lambda: self.set_position(previous, undo=False)) if undo else None
+            self.feedback("The toolbar is now {}.".format(self.POSITION_NAMES.get(position, position)), action=action)
 
     def _hide_toolbar(self):
         self.runtime.settings.toolbar_visible = False
@@ -970,10 +976,20 @@ class ToolbarController(QtCore.QObject):
         target = max(0, min(len(order) - 1, index + delta))
         entry = order.pop(index)
         order.insert(target, entry)
+        undo = self._undo_order()
         if self.runtime.set_toolbar_order(order):
             vertical = self.strip.style_info.vertical
             direction = ("up" if vertical else "left") if delta < 0 else ("down" if vertical else "right")
-            self.feedback("Moved {} {}.".format(self._entry_name(entry), direction))
+            self.feedback("Moved {} {}.".format(self._entry_name(entry), direction), action=undo)
+
+    def _undo_order(self):
+        """An Undo button that puts the saved toolbar order (buttons and dividers) back as it is right now."""
+        snapshot = list(self.runtime.settings.toolbar_order)
+        return ("Undo", "undo-2", lambda: self._restore_order(snapshot))
+
+    def _restore_order(self, snapshot):
+        if self.runtime.set_full_order(snapshot):
+            self.feedback("Undone. The toolbar is back as it was.")
 
     def _entry_name(self, entry):
         """How a toolbar entry is called in messages: the script's name, or "the divider"."""
@@ -993,12 +1009,15 @@ class ToolbarController(QtCore.QObject):
                 package.purchase_label(), package.display_name))
 
     def _add_divider(self, guid):
+        undo = self._undo_order()
         if self.runtime.add_toolbar_divider(guid):
-            self.feedback("Added a divider after {}.".format(self._entry_name(guid)))
+            self.feedback("Added a divider after {}.\nDrag it, or right-click it to move or remove it.".format(
+                self._entry_name(guid)), action=undo)
 
     def _remove_divider(self, ordinal):
+        undo = self._undo_order()
         if self.runtime.remove_toolbar_divider(ordinal):
-            self.feedback("Removed the divider.")
+            self.feedback("Removed the divider.", action=undo)
 
     def _hide_package(self, guid):
         name = self._entry_name(guid)
@@ -1016,7 +1035,8 @@ class ToolbarController(QtCore.QObject):
                 self.feedback("The toolbar is locked.\nButtons and dividers keep their places.", "info",
                               action=("Unlock", "lock-open", lambda: self._set_locked(False)))
             else:
-                self.feedback("The toolbar is unlocked.\nHold Alt and drag to arrange its buttons.")
+                self.feedback("The toolbar is unlocked.\nHold Alt and drag to arrange its buttons.",
+                              action=("Lock Again", "lock", lambda: self._set_locked(True)))
 
     def _divider_menu(self, divider):
         if divider not in self.strip.buttons:

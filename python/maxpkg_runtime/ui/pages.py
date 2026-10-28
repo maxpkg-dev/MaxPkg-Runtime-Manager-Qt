@@ -227,10 +227,15 @@ class InstalledPage(ScrollPage):
         shown.insert(index, guid)
         merged = merge_visible_order(self.settings.toolbar_order, shown, [package.guid for package in
                                                                           self.visible_packages()])
+        snapshot = list(self.settings.toolbar_order)
         if self.runtime.set_full_order(merged):
             package = self.runtime.package(guid)
             self.manager_window.notify("Moved {} on the toolbar.".format(package.display_name if package else "it"),
-                                       "success")
+                                       "success", action=("Undo", "undo-2", lambda: self._undo_reorder(snapshot)))
+
+    def _undo_reorder(self, snapshot):
+        if self.runtime.set_full_order(snapshot):
+            self.manager_window.notify("Undone. The toolbar order is back as it was.", "success")
 
 
 def _event_point(event):

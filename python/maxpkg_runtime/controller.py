@@ -70,6 +70,7 @@ class Controller:
         settings.manager_theme = self.themes.set_manager(settings.manager_theme)
         self.runtime.start()
         self.runtime.notify.connect(self._notify_outside)
+        self.runtime.details_requested.connect(self.open_details)
         self.runtime.settings_changed.connect(self._on_settings)
         self.toolbar = ToolbarController(self.runtime, self.themes, self.images, self.open_manager,
                                          self.open_details, self.feedback)
@@ -123,6 +124,7 @@ class Controller:
             self.toolbar.deleteLater()
         if self.runtime is not None:
             for signal, slot in ((self.runtime.notify, self._notify_outside),
+                                 (self.runtime.details_requested, self.open_details),
                                  (self.runtime.settings_changed, self._on_settings)):
                 try:
                     signal.disconnect(slot)
@@ -291,13 +293,13 @@ class Controller:
             bottom = point.y() - self.SCREEN_TOAST_GAP
 
     # ----------------------------------------------------------------- messages
-    def _notify_outside(self, text, kind):
+    def _notify_outside(self, text, kind, actions=None):
         """With the Manager closed, Runtime messages (installs, updates, errors) appear as screen toasts."""
         if self._manager_showing():
             return
         if not self.runtime.settings.notifications and kind != "error":
             return
-        self.screen_toast(text, kind)
+        self.screen_toast(text, kind, actions)
 
     def _on_settings(self, area):
         if area == "developer":

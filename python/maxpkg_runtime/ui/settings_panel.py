@@ -420,25 +420,42 @@ class SettingsPanel(QtWidgets.QWidget):
         if value != self.runtime.settings.api_endpoint and (value or not self.endpoint.text().strip()):
             self._set("api_endpoint", value, "endpoint")
 
+    TOOLBAR_DEFAULTS = (("toolbar_visible", True), ("toolbar_title_mode", "packageName"),
+                        ("toolbar_subtitle_mode", "version"), ("toolbar_button_size", "medium"),
+                        ("toolbar_dock_position", "top"), ("toolbar_density", "regular"),
+                        ("toolbar_icon_size", "large"), ("hidden_packages", []))
+
     def _reset_toolbar(self):
         settings = self.runtime.settings
-        settings.toolbar_visible = True
-        settings.toolbar_title_mode = "packageName"
-        settings.toolbar_subtitle_mode = "version"
-        settings.toolbar_button_size = "medium"
-        settings.toolbar_dock_position = "top"
-        settings.toolbar_density = "regular"
-        settings.toolbar_icon_size = "large"
-        settings.hidden_packages = []
+        snapshot = {name: getattr(settings, name) for name, _value in self.TOOLBAR_DEFAULTS}
+        snapshot["toolbar_order"] = list(settings.toolbar_order)
+        for name, value in self.TOOLBAR_DEFAULTS:
+            setattr(settings, name, list(value) if isinstance(value, list) else value)
         self.runtime.save_settings("toolbar")
         if self.runtime.reset_toolbar_order():
             self.manager_window.notify("The toolbar is back to its defaults.\nAll scripts are shown, in their "
-                                       "original order, without dividers.", "success")
+                                       "original order, without dividers.", "success",
+                                       action=("Undo", "undo-2", lambda: self._restore_toolbar(snapshot)))
+
+    def _restore_toolbar(self, snapshot):
+        settings = self.runtime.settings
+        for name, value in snapshot.items():
+            if name != "toolbar_order":
+                setattr(settings, name, value)
+        self.runtime.save_settings("toolbar")
+        if self.runtime.set_full_order(snapshot["toolbar_order"]):
+            self.manager_window.notify("Undone. Your toolbar settings are back.", "success")
 
     def _reset_order(self):
+        snapshot = list(self.runtime.settings.toolbar_order)
         if self.runtime.reset_toolbar_order():
             self.manager_window.notify("The toolbar order is reset.\nScripts are back in their original order, "
-                                       "without dividers.", "success")
+                                       "without dividers.", "success",
+                                       action=("Undo", "undo-2", lambda: self._restore_order(snapshot)))
+
+    def _restore_order(self, snapshot):
+        if self.runtime.set_full_order(snapshot):
+            self.manager_window.notify("Undone. The toolbar order is back as it was.", "success")
 
     def _copy_info(self):
         from ..qt_compat import binding_info

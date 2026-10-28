@@ -80,7 +80,9 @@ class Runtime(QtCore.QObject):
     details_changed = Signal(str)        # guid
     settings_changed = Signal(str)       # area: general/toolbar/theme/updates
     busy_changed = Signal(str)           # operation message, '' when idle
-    notify = Signal(str, str)            # message, kind (info/success/warning/error)
+    # message, kind (info/success/warning/error), actions: [(label, icon name, callback)] the toast offers
+    notify = Signal(str, str, object)
+    details_requested = Signal(str)      # guid: a toast's Details button (the Controller opens the Manager page)
     updates_checking_changed = Signal(bool)
 
     def __init__(self, root, version, channel, parent=None):
@@ -120,13 +122,17 @@ class Runtime(QtCore.QObject):
         self._stopped = True
         self.network.stop()
 
+    def say(self, text, kind="info", actions=None):
+        """A message for the user; `actions` are offered as buttons on its toast (the first one is the main one)."""
+        self.notify.emit(text, kind, list(actions or []))
+
     # ----------------------------------------------------------------- settings
     def save_settings(self, area="general"):
         try:
             self.settings.save()
         except OSError as error:
             log.error("settings", "Could not save settings: " + str(error))
-            self.notify.emit("Settings could not be saved: " + str(error), "error")
+            self.say("Settings could not be saved: " + str(error), "error")
             return False
         self.settings_changed.emit(area)
         return True
@@ -192,11 +198,11 @@ class Runtime(QtCore.QObject):
     def run(self, reference):
         package = self.package(reference)
         if package is None:
-            self.notify.emit("The package could not be found.", "error")
+            self.say("The package could not be found.", "error")
             return False
         ok, message = max_api.run_package(package)
         if not ok:
-            self.notify.emit(package.display_name + " could not be started.\n" + message, "error")
+            self.say(package.display_name + " could not be started.\n" + message, "error")
         return ok
 
     def set_toolbar_visible(self, reference, visible):
@@ -255,7 +261,7 @@ class Runtime(QtCore.QObject):
     def open_link(self, package, kind):
         url = self.link_url(package, kind)
         if not max_api.open_url(url):
-            self.notify.emit("This link is not available.", "warning")
+            self.say("This link is not available.", "warning")
             return False
         return True
 
@@ -381,7 +387,7 @@ class Runtime(QtCore.QObject):
     def check_updates(self, manual=True):
         if self.checking_updates or not self.packages:
             if manual and not self.packages:
-                self.notify.emit("No installed packages to check.", "info")
+                self.say("No installed packages to check.", "info")
             return False
         self.checking_updates = True
         self.updates_checking_changed.emit(True)
@@ -393,8 +399,8 @@ class Runtime(QtCore.QObject):
             if error is not None:
                 log.warning("updater", "Update check failed: " + network.describe(error))
                 if manual:
-                    self.notify.emit("The package update check failed. The previous result is still available.",
-                                     "error")
+                    self.say("The package update check failed.\nThe previous result is still available.", "error",
+                             [("Try Again", "refresh-cw", lambda: self.check_updates(True))])
                 return
             cache = []
             for package in self.packages:
@@ -408,23 +414,32 @@ class Runtime(QtCore.QObject):
             self._apply_known_updates()
             self.packages_changed.emit()
             if manual:
-                count = self.update_count()
-                if not count:
-                    self.notify.emit("All packages are up to date.", "success")
-                elif count == 1:
-                    self.notify.emit("1 update is available.\nOpen the Updates tab to install it.", "info")
-                else:
-                    self.notify.emit("{} updates are available.\nOpen the Updates tab to install them.".format(count),
-                                     "info")
+                self._offer_updates()
 
         self._post(api.updates_request(self.packages, max_year, self.version, self.api_channel),
                    lambda text: api.parse_updates(text, max_year), done)
         return True
 
+    def _offer_updates(self):
+        """The result of a manual check, with the update right on the toast."""
+        pending = [package for package in self.packages if package.update_available]
+        if not pending:
+            self.say("All packages are up to date.", "success")
+        elif len(pending) == 1:
+            package = pending[0]
+            self.say("An update is available.\n{} {} → {}".format(package.display_name, package.version,
+                                                                        package.latest_version), "info",
+                     [("Update", "download", lambda: self.update(package.guid))])
+        else:
+            names = ", ".join(package.display_name for package in pending[:3]) + (
+                " and {} more".format(len(pending) - 3) if len(pending) > 3 else "")
+            self.say("{} updates are available.\n{}".format(len(pending), names), "info",
+                     [("Update All", "download", self.update_all)])
+
     # ----------------------------------------------------------------- critical operations
     def _begin(self, message):
         if self.operation:
-            self.notify.emit("Another package operation is already running.", "warning")
+            self.say("Another package operation is already running.", "warning")
             return False
         self.operation = message
         self.busy_changed.emit(message)
@@ -434,17 +449,20 @@ class Runtime(QtCore.QObject):
         self.operation = ""
         self.busy_changed.emit("")
 
-    def install(self, reference, on_done=None):
-        """Resolve (API) and download asynchronously, then fileIn the MZP on the main thread and verify."""
+    def install(self, reference, on_done=None, updating=False):
+        """Resolve (API) and download asynchronously, then fileIn the MZP on the main thread and verify.
+        `updating`: the package is installed over an older version (the messages say "updated")."""
         reference = (reference or "").strip()
-        if not reference or not self._begin("Installing package..."):
+        if not reference or not self._begin("Updating package..." if updating else "Installing package..."):
             return False
         max_year = self.max_year
+        retry = [("Try Again", "refresh-cw", lambda: self.install(reference, updating=updating))]
 
         def failed(error):
             self._finish()
             message = error.message if isinstance(error, api.ApiError) else network.describe(error)
-            self.notify.emit("Package could not be installed.\n" + message, "error")
+            self.say(("Package could not be updated.\n" if updating else "Package could not be installed.\n") + message,
+                     "error", retry)
             if on_done:
                 on_done(False)
 
@@ -476,9 +494,19 @@ class Runtime(QtCore.QObject):
             package = self.package(guid) if guid else None
             label = package.display_name if package else reference
             if ok:
-                self.notify.emit(label + " was installed.", "success")
+                run = [("Run", "play", lambda: self.run(package.guid)),
+                       ("Details", "info", lambda: self.details_requested.emit(package.guid))] if package else []
+                if updating:
+                    self.say("{} was updated to {}.".format(label, package.version if package else "the new version"),
+                             "success", run)
+                else:
+                    on_toolbar = (package is not None and self.settings.toolbar_visible
+                                  and self.is_on_toolbar(package))
+                    self.say(label + " was installed." + ("\nIt is on the toolbar now." if on_toolbar else ""),
+                             "success", run)
             else:
-                self.notify.emit(label + " could not be installed or verified.", "error")
+                self.say(label + (" could not be updated or verified." if updating else
+                                  " could not be installed or verified."), "error", retry)
             if on_done:
                 on_done(ok)
 
@@ -505,9 +533,9 @@ class Runtime(QtCore.QObject):
     def update(self, reference, on_done=None):
         package = self.package(reference)
         if package is None or not package.update_available:
-            self.notify.emit("No compatible package update is available.", "info")
+            self.say("No compatible package update is available.", "info")
             return False
-        return self.install(package.download_url or package.guid, on_done)
+        return self.install(package.download_url or package.guid, on_done, updating=True)
 
     def update_all(self):
         pending = [package.guid for package in self.packages if package.update_available]
@@ -522,7 +550,7 @@ class Runtime(QtCore.QObject):
     def uninstall(self, reference):
         package = self.package(reference)
         if package is None:
-            self.notify.emit("The package could not be found.", "error")
+            self.say("The package could not be found.", "error")
             return False
         if not self._begin("Uninstalling package..."):
             return False
@@ -532,9 +560,11 @@ class Runtime(QtCore.QObject):
             self.scan()
             self._finish()
         if ok and self.package(package.guid) is None:
-            self.notify.emit(package.display_name + " was removed.", "success")
+            guid = package.guid
+            self.say(package.display_name + " was removed.\nYour scenes are not changed.", "success",
+                     [("Reinstall", "download", lambda: self.install(guid))])
             return True
-        self.notify.emit(package.display_name + " could not be removed." + ("\n" + message if message else ""), "error")
+        self.say(package.display_name + " could not be removed." + ("\n" + message if message else ""), "error")
         return False
 
     def _uninstall(self, package):
