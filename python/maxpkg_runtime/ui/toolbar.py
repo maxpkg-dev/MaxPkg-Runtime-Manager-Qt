@@ -6,6 +6,7 @@ itself is never destroyed while the Runtime runs. Package buttons look like the 
 (icon, name, version/developer line, update badge on the maxpkg button) but are painted by Qt.
 """
 
+from ..domain.packages import DIVIDER, is_divider
 from ..qt_compat import (QAction, QtCore, QtGui, QtWidgets, Qt, Signal, event_global_pos, exec_menu, is_valid,
                          max_main_window, screen_at)
 from . import icons
@@ -261,6 +262,72 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         QtWidgets.QAbstractButton.mouseReleaseEvent(self, event)
 
 
+class ToolbarDivider(QtWidgets.QWidget):
+    """A divider between toolbar buttons: a thin rounded line across the line of buttons. It has no click, so a
+    plain drag moves it (Alt + drag works too, like the buttons); its menu moves or removes it."""
+
+    alt_drag = Signal(object, object)
+    THICKNESS = 9
+
+    def __init__(self, style, toolbar_theme, parent=None):
+        QtWidgets.QWidget.__init__(self, parent)
+        self.item = ToolbarItem(DIVIDER, "", "", "Divider - drag to move, right-click to remove", "", "", False)
+        self.setToolTip(self.item.tooltip)
+        self.setCursor(Qt.SizeAllCursor)
+        self.setAttribute(Qt.WA_Hover)
+        self._dragging = False
+        self.apply(style, toolbar_theme)
+
+    def apply(self, style, toolbar_theme):
+        self.style_info = style
+        self.theme = toolbar_theme
+        across = style.button.width() if style.vertical else style.button.height()
+        self.setFixedSize(QtCore.QSize(across, self.THICKNESS) if style.vertical else QtCore.QSize(self.THICKNESS, across))
+        self.update()
+
+    def paintEvent(self, _event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        color = QtGui.QColor(self.theme.color("buttonSecondaryText"))
+        color.setAlphaF(0.75 if (self.underMouse() or self._dragging) else 0.38)
+        pen = QtGui.QPen(color, 1.5)
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        middle = QtCore.QPointF(self.width() / 2.0, self.height() / 2.0)
+        if self.style_info.vertical:
+            reach = self.width() * 0.32
+            painter.drawLine(QtCore.QPointF(middle.x() - reach, middle.y()), QtCore.QPointF(middle.x() + reach, middle.y()))
+        else:
+            reach = self.height() * 0.32
+            painter.drawLine(QtCore.QPointF(middle.x(), middle.y() - reach), QtCore.QPointF(middle.x(), middle.y() + reach))
+        painter.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._dragging = True
+            self.setCursor(Qt.ClosedHandCursor)
+            self.update()
+            event.accept()
+            return
+        QtWidgets.QWidget.mousePressEvent(self, event)
+
+    def mouseMoveEvent(self, event):
+        if self._dragging:
+            self.alt_drag.emit(self, event_global_pos(event))
+            return
+        QtWidgets.QWidget.mouseMoveEvent(self, event)
+
+    def mouseReleaseEvent(self, event):
+        if self._dragging:
+            self._dragging = False
+            self.setCursor(Qt.SizeAllCursor)
+            self.update()
+            self.alt_drag.emit(self, None)
+            event.accept()
+            return
+        QtWidgets.QWidget.mouseReleaseEvent(self, event)
+
+
 class ButtonStrip(QtWidgets.QWidget):
     """Brand + package buttons in a row or column. Used inside the QToolBar and in the preview."""
 
@@ -475,6 +542,7 @@ class ToolbarController(QtCore.QObject):
         self._mode = ""
         self._area = None
         self._buttons = {}
+        self._dividers = []
         self._drag_order = None
         runtime.packages_changed.connect(self.sync)
         runtime.settings_changed.connect(self._on_settings)
@@ -509,6 +577,7 @@ class ToolbarController(QtCore.QObject):
             self.floating.deleteLater()
         self.toolbar = self.floating = self.strip = None
         self._buttons = {}
+        self._dividers = []
         self._mode = ""
 
     def _on_settings(self, area):
@@ -555,11 +624,13 @@ class ToolbarController(QtCore.QObject):
             strip.brand.customContextMenuRequested.connect(lambda _pos: self._brand_menu())
             strip.brand.show()  # the docked QWidgetAction shows it; the floating strip does not
         updates = self.runtime.update_count()
-        brand_tip = "{} package update(s) available. Open MaxPkg Manager".format(updates) if updates else "Open MaxPkg Manager"
+        brand_tip = ("{} package update{} available. Open MaxPkg Manager".format(updates, "" if updates == 1 else "s")
+                     if updates else "Open MaxPkg Manager")
         strip.brand.apply(ToolbarItem("", "maxpkg", "", brand_tip, "", "M", False), style, theme)
         strip.brand.set_badge(updates)
-        wanted = [ToolbarItem.from_package(package, settings) for package in self.runtime.toolbar_packages()]
-        wanted_guids = [item.guid for item in wanted]
+        entries = self.runtime.toolbar_entries()
+        wanted = [ToolbarItem.from_package(entry, settings) if entry != DIVIDER else None for entry in entries]
+        wanted_guids = [item.guid for item in wanted if item is not None]
         for guid in list(self._buttons):
             if guid not in wanted_guids:
                 button = self._buttons.pop(guid)
@@ -567,8 +638,32 @@ class ToolbarController(QtCore.QObject):
                     strip.forget(button)
                 button.hide()
                 button.deleteLater()
+        # Dividers have no identity: the n-th divider widget is reused for the n-th divider entry.
+        divider_count = sum(1 for item in wanted if item is None)
+        while len(self._dividers) > divider_count:
+            divider = self._dividers.pop()
+            if isinstance(strip, DockedStrip):
+                strip.forget(divider)
+            divider.hide()
+            divider.deleteLater()
         ordered = []
+        dividers_used = 0
         for item in wanted:
+            if item is None:
+                if dividers_used < len(self._dividers):
+                    divider = self._dividers[dividers_used]
+                    divider.apply(style, theme)
+                else:
+                    divider = ToolbarDivider(style, theme, parent=parent)
+                    divider.setContextMenuPolicy(Qt.CustomContextMenu)
+                    divider.customContextMenuRequested.connect(
+                        lambda _pos, widget=divider: self._divider_menu(widget))
+                    divider.alt_drag.connect(self._on_alt_drag)
+                    divider.show()
+                    self._dividers.append(divider)
+                dividers_used += 1
+                ordered.append(divider)
+                continue
             button = self._buttons.get(item.guid)
             if button is None:
                 button = ToolbarButton(item, style, theme, self.images, parent=parent)
@@ -760,6 +855,8 @@ class ToolbarController(QtCore.QObject):
         move_next = add_action(menu, "Move Down" if self.strip.style_info.vertical else "Move Right",
                                lambda: self._move(guid, 1), self.themes, "arrow-right")
         move_next.setEnabled(index < len(self.strip.buttons) - 1)
+        add_action(menu, "Add Divider", lambda: self.runtime.add_toolbar_divider(guid), self.themes,
+                   "separator-vertical" if not self.strip.style_info.vertical else "separator-horizontal")
         add_action(menu, "Hide from Toolbar", lambda: self.runtime.set_toolbar_visible(guid, False), self.themes,
                    "eye-off")
         menu.addSeparator()
@@ -807,11 +904,36 @@ class ToolbarController(QtCore.QObject):
         self.runtime.notify.emit("The toolbar is hidden. Turn it on again in Settings > Toolbar.", "info")
 
     def _move(self, guid, delta):
-        order = [button.item.guid for button in self.strip.buttons]
-        index = order.index(guid)
+        self._move_index([button.item.guid for button in self.strip.buttons].index(guid), delta)
+
+    def _move_index(self, index, delta):
+        """Move the entry at `index` of the toolbar line (a button or a divider) by one place."""
+        order = [widget.item.guid for widget in self.strip.buttons]
         target = max(0, min(len(order) - 1, index + delta))
         order.insert(target, order.pop(index))
         self.runtime.set_toolbar_order(order)
+
+    def _divider_menu(self, divider):
+        if divider not in self.strip.buttons:
+            return
+        index = self.strip.buttons.index(divider)
+        ordinal = sum(1 for widget in self.strip.buttons[:index] if is_divider(widget.item.guid))
+        vertical = self.strip.style_info.vertical
+        menu = themed_menu(None)
+        menu.setStyleSheet(self.themes.qss())
+        move_back = add_action(menu, "Move Up" if vertical else "Move Left", lambda: self._move_index(index, -1),
+                               self.themes, "arrow-left")
+        move_back.setEnabled(index > 0)
+        move_next = add_action(menu, "Move Down" if vertical else "Move Right", lambda: self._move_index(index, 1),
+                               self.themes, "arrow-right")
+        move_next.setEnabled(index < len(self.strip.buttons) - 1)
+        menu.addSeparator()
+        add_action(menu, "Toolbar settings...", lambda: self.open_manager("settings:toolbar"), self.themes, "settings")
+        menu.addSeparator()
+        add_danger_action(menu, "Remove Divider", lambda: self.runtime.remove_toolbar_divider(ordinal), self.themes,
+                          "x")
+        exec_menu(menu, QtGui.QCursor.pos())
+        menu.deleteLater()
 
 
 class ToolbarPreview(QtWidgets.QFrame):

@@ -230,11 +230,22 @@ def ordered_for_toolbar(packages, order, is_hidden):
     return ordered + rest
 
 
+# A toolbar divider: an entry of the saved toolbar order between package GUIDs (any number, toolbar only).
+DIVIDER = "divider"
+
+
+def is_divider(entry):
+    return entry.lower() == DIVIDER
+
+
 def normalized_order(packages, order):
-    """Saved order with unknown GUIDs dropped and newly discovered packages appended."""
+    """Saved order with unknown GUIDs dropped and newly discovered packages appended; dividers are kept."""
     known = {package.guid.lower(): package.guid for package in packages}
     result = []
     for guid in order:
+        if is_divider(guid):
+            result.append(DIVIDER)
+            continue
         canonical = known.get(guid.lower())
         if canonical and canonical not in result:
             result.append(canonical)
@@ -245,18 +256,39 @@ def normalized_order(packages, order):
 
 
 def merge_visible_order(saved_order, visible_new_order, visible_guids):
-    """Apply a reordering of the visible subset while keeping hidden packages in their slots."""
+    """Apply a reordering of the visible subset while keeping hidden packages in their slots.
+
+    Dividers move with the new order when it contains them (the toolbar); otherwise (the Manager, which never
+    shows dividers) they keep their slots like hidden packages.
+    """
     visible = {guid.lower() for guid in visible_guids}
+    dividers_move = any(is_divider(entry) for entry in visible_new_order)
     queue = list(visible_new_order)
     merged = []
     for guid in saved_order:
-        if guid.lower() in visible:
+        if guid.lower() in visible or (dividers_move and is_divider(guid)):
             if queue:
                 merged.append(queue.pop(0))
         else:
             merged.append(guid)
     merged.extend(queue)
     return merged
+
+
+def toolbar_entries(packages, order, is_hidden):
+    """The toolbar line: visible packages (Package objects) and dividers (DIVIDER) in saved order, then visible
+    packages missing from the order."""
+    visible = ordered_for_toolbar(packages, order, is_hidden)
+    by_guid = {package.guid.lower(): package for package in visible}
+    entries, placed = [], set()
+    for entry in order:
+        if is_divider(entry):
+            entries.append(DIVIDER)
+        elif entry.lower() in by_guid and entry.lower() not in placed:
+            entries.append(by_guid[entry.lower()])
+            placed.add(entry.lower())
+    entries.extend(package for package in visible if package.guid.lower() not in placed)
+    return entries
 
 
 def compact_number(value):
@@ -269,4 +301,5 @@ def compact_number(value):
 
 
 __all__ = ["Package", "ChangelogEntry", "Screenshot", "scan", "read_manifest", "is_newer", "compatible",
-           "ordered_for_toolbar", "normalized_order", "merge_visible_order", "compact_number", "to_float"]
+           "ordered_for_toolbar", "normalized_order", "merge_visible_order", "compact_number", "to_float", "DIVIDER",
+           "is_divider", "toolbar_entries"]

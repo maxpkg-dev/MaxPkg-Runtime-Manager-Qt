@@ -7,8 +7,8 @@ import unittest
 
 from maxpkg_runtime.domain import api, markdown
 from maxpkg_runtime.domain.ini import IniDocument
-from maxpkg_runtime.domain.packages import (Package, compact_number, is_newer, merge_visible_order,
-                                            normalized_order, ordered_for_toolbar, scan)
+from maxpkg_runtime.domain.packages import (DIVIDER, Package, compact_number, is_newer, merge_visible_order,
+                                            normalized_order, ordered_for_toolbar, scan, toolbar_entries)
 from maxpkg_runtime.domain.settings import Settings, load_or_migrate, normalize_endpoint
 
 
@@ -96,6 +96,19 @@ class PackageTests(unittest.TestCase):
         ordered = ordered_for_toolbar(packages, ["C", "A", "B"], lambda guid: guid == "A")
         self.assertEqual([package.guid for package in ordered], ["C", "B"])
         self.assertEqual(merge_visible_order(["C", "A", "B"], ["B", "C"], ["C", "B"]), ["B", "A", "C"])
+
+    def test_toolbar_dividers(self):
+        packages = [Package(guid="A", name="a"), Package(guid="B", name="b"), Package(guid="C", name="c")]
+        saved = normalized_order(packages, ["A", "divider", "x", "B", "Divider", "C"])
+        self.assertEqual(saved, ["A", DIVIDER, "B", DIVIDER, "C"])
+        # The toolbar moves dividers with the buttons.
+        self.assertEqual(merge_visible_order(saved, [DIVIDER, "A", "B", "C", DIVIDER], ["A", "B", "C"]),
+                         [DIVIDER, "A", "B", "C", DIVIDER])
+        # The Manager never shows dividers: they keep their slots while packages move.
+        self.assertEqual(merge_visible_order(saved, ["C", "B", "A"], ["A", "B", "C"]), ["C", DIVIDER, "B", DIVIDER, "A"])
+        # A hidden package leaves its divider on the toolbar.
+        entries = toolbar_entries(packages, saved, lambda guid: guid == "B")
+        self.assertEqual([entry if entry == DIVIDER else entry.guid for entry in entries], ["A", DIVIDER, DIVIDER, "C"])
 
 
 class ApiTests(unittest.TestCase):

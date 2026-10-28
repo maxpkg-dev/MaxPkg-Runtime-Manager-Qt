@@ -12,8 +12,8 @@ import stat
 import uuid
 
 from ..domain import api
-from ..domain.packages import (Package, compatible, is_newer, merge_visible_order, normalized_order,
-                               ordered_for_toolbar, scan)
+from ..domain.packages import (DIVIDER, Package, compatible, is_divider, is_newer, merge_visible_order,
+                               normalized_order, ordered_for_toolbar, scan, toolbar_entries)
 from ..domain.settings import load_or_migrate
 from ..qt_compat import QtCore, Signal
 from . import log, max_api, network
@@ -152,6 +152,27 @@ class Runtime(QtCore.QObject):
 
     def toolbar_packages(self):
         return ordered_for_toolbar(self.packages, self.settings.toolbar_order, self.settings.is_hidden)
+
+    def toolbar_entries(self):
+        """Visible packages and DIVIDER entries in toolbar order (only the toolbar shows dividers)."""
+        return toolbar_entries(self.packages, self.settings.toolbar_order, self.settings.is_hidden)
+
+    def add_toolbar_divider(self, after_guid):
+        """Insert a divider right after `after_guid` in the saved order (any number of dividers is allowed)."""
+        order = list(self.settings.toolbar_order)
+        lowered = [entry.lower() for entry in order]
+        position = lowered.index(after_guid.lower()) + 1 if after_guid.lower() in lowered else len(order)
+        order.insert(position, DIVIDER)
+        return self.set_full_order(order)
+
+    def remove_toolbar_divider(self, ordinal):
+        """Remove the `ordinal`-th divider (0-based, the same count as on the toolbar)."""
+        order = list(self.settings.toolbar_order)
+        positions = [index for index, entry in enumerate(order) if is_divider(entry)]
+        if not 0 <= ordinal < len(positions):
+            return False
+        order.pop(positions[ordinal])
+        return self.set_full_order(order)
 
     def is_on_toolbar(self, package):
         return package.toolbar_visible and not self.settings.is_hidden(package.guid)
@@ -368,7 +389,13 @@ class Runtime(QtCore.QObject):
             self.packages_changed.emit()
             if manual:
                 count = self.update_count()
-                self.notify.emit("{} update(s) available.".format(count), "success" if count else "info")
+                if not count:
+                    self.notify.emit("All packages are up to date.", "success")
+                elif count == 1:
+                    self.notify.emit("1 update is available.\nOpen the Updates tab to install it.", "info")
+                else:
+                    self.notify.emit("{} updates are available.\nOpen the Updates tab to install them.".format(count),
+                                     "info")
 
         self._post(api.updates_request(self.packages, max_year, self.version, self.api_channel),
                    lambda text: api.parse_updates(text, max_year), done)

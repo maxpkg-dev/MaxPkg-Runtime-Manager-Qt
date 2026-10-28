@@ -248,13 +248,13 @@ QMenu#ContextMenu::icon { padding-left: 18px; }
 #BusyCard { background: transparent; border: none; }
 #BusyTitle { color: @textStrong; font-size: 14px; font-weight: bold; }
 #BusyHint { color: @textMuted; font-size: 12px; }
-#Toast {
-    border: 1px solid @borderStrong; border-left: 4px solid @borderFocus; border-radius: 12px;
-    background: @surfaceTertiary;
-}
-#Toast[kind="success"] { border-left-color: @success; }
-#Toast[kind="warning"] { border-left-color: @warning; }
-#Toast[kind="error"] { border-left-color: @danger; }
+/* Toasts paint their own glass card (manager_window.Toast); only the texts and the close button are styled here. */
+#Toast { background: transparent; border: none; }
+#ToastTitle { color: @textStrong; font-size: 13px; font-weight: bold; }
+#ToastBody { color: @textSecondary; font-size: 12px; }
+QPushButton#ToastClose { border: none; border-radius: 10px; background: transparent; padding: 0;
+                         min-width: 22px; max-width: 22px; min-height: 22px; max-height: 22px; }
+QPushButton#ToastClose:hover { background: @surfaceHover; }
 #ToastText { color: @textStrong; }
 
 /* ---------- settings ---------- */

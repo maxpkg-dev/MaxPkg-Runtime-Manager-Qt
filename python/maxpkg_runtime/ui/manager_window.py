@@ -56,21 +56,102 @@ class TabButton(QtWidgets.QPushButton):
 
 
 class Toast(QtWidgets.QFrame):
+    """Glass notification: an animated status icon on a tinted disc, a bold first line and a muted rest, a close
+    button and a thin bar that shows the time left (it waits while the pointer is over the toast). It slides in
+    from the right. A click anywhere closes it."""
+
+    STATES = {"success": ("done", "success"), "error": ("error", "danger"), "warning": ("warning", "warning")}
+    LIFETIME_MS = {"error": 8000, "warning": 6500}
+    DEFAULT_LIFETIME_MS = 5200
+    WIDTH = 340
+    RADIUS = 14
+
     def __init__(self, text, kind, themes, parent):
         QtWidgets.QFrame.__init__(self, parent)
         self.setObjectName("Toast")
-        self.setProperty("kind", kind)
-        icon_name = {"success": "circle-check", "error": "circle-x", "warning": "info"}.get(kind, "info")
-        token = {"success": "iconSuccess", "error": "iconDanger", "warning": "iconWarning"}.get(kind, "iconAccent")
-        glyph = IconLabel(icon_name, themes, token, 20)
-        message = label(text, "ToastText", wrap=True)
-        self.setLayout(hbox(glyph, message, spacing=12, margins=(14, 12, 14, 12)))
-        self.layout().setStretch(1, 1)
-        self.setFixedWidth(330)
-        QtCore.QTimer.singleShot(5200 if kind != "error" else 8000, self._expire)
+        self.themes = themes
+        self.kind = kind
+        state, self._token = self.STATES.get(kind, ("info", "accent"))
+        self.icon = StatusIcon(themes, size=28)
+        self.icon.set_state(state)
+        disc = QtWidgets.QWidget()
+        disc.setFixedSize(40, 40)
+        disc_layout = hbox(self.icon, margins=(6, 6, 6, 6))
+        disc.setLayout(disc_layout)
+        self._disc = disc
+        lines = (text or "").split("\n", 1)
+        # Wrapped labels get an exact width, or the nested layout sizes them for a narrower one (gaps).
+        text_width = self.WIDTH - 12 - 40 - 12 - 12 - 22 - 10
+        title = label(lines[0], "ToastTitle", wrap=True)
+        title.setFixedWidth(text_width)
+        texts = vbox(title, spacing=3)
+        if len(lines) > 1 and lines[1].strip():
+            body = label(lines[1].strip(), "ToastBody", wrap=True)
+            body.setFixedWidth(text_width)
+            texts.addWidget(body)
+            texts.addStretch(1)
+        close = IconButton("x", "Close", themes)
+        close.setObjectName("ToastClose")
+        close.setFixedSize(22, 22)
+        themes.bind_icon(close, "x", "iconMuted", 14)
+        close.clicked.connect(self._expire)
+        row = hbox(spacing=12, margins=(12, 12, 10, 14))
+        row.addWidget(disc, 0, Qt.AlignTop)
+        row.addLayout(texts, 1)
+        row.addWidget(close, 0, Qt.AlignTop)
+        if len(lines) == 1 or not lines[1].strip():
+            row.setAlignment(texts, Qt.AlignVCenter)  # a single line sits beside the icon's middle
+        self.setLayout(row)
+        self.setFixedWidth(self.WIDTH)
+        self.setAttribute(Qt.WA_Hover)
+        self._lifetime = self.LIFETIME_MS.get(kind, self.DEFAULT_LIFETIME_MS)
+        self._left = float(self._lifetime)
+        self._clock = QtCore.QElapsedTimer()
+        self._clock.start()
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+        self._slide = QtCore.QPropertyAnimation(self, b"pos", self)
+        self._slide.setDuration(260)
+        self._slide.setEasingCurve(QtCore.QEasingCurve.OutCubic)
+        self._entered = False
+        self._opacity = QtWidgets.QGraphicsOpacityEffect(self)
+        self._opacity.setOpacity(0.0)
+        self.setGraphicsEffect(self._opacity)
+        self._fade = QtCore.QPropertyAnimation(self._opacity, b"opacity", self)
+        self._fade.setDuration(220)
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+        # Drop the effect once visible: it renders through an offscreen buffer that let the page show through.
+        self._fade.finished.connect(lambda: self.setGraphicsEffect(None))
+
+    def place(self, point):
+        """Move to `point`; the first time it slides in from the right and fades in."""
+        if not self._entered:
+            self._entered = True
+            self.move(point + QtCore.QPoint(28, 0))
+            self._slide.setStartValue(self.pos())
+            self._slide.setEndValue(point)
+            self._slide.start()
+            self._fade.start()
+        elif self._slide.state() == QtCore.QAbstractAnimation.Running:
+            self._slide.setEndValue(point)
+        else:
+            self.move(point)
+
+    def _tick(self):
+        elapsed = self._clock.restart()
+        if not self.underMouse():  # reading a toast keeps it open
+            self._left -= elapsed
+        if self._left <= 0:
+            self._expire()
+            return
+        self.update()
 
     def _expire(self):
         if is_valid(self):
+            self._timer.stop()
             parent = self.parentWidget()
             self.hide()
             self.deleteLater()
@@ -79,6 +160,50 @@ class Toast(QtWidgets.QFrame):
 
     def mousePressEvent(self, event):
         self._expire()
+
+    def paintEvent(self, _event):
+        theme = self.themes.manager
+        accent = theme.color(self._token)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        rect = QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        # Opaque: toasts sit over busy pages, any see-through lets buttons below show.
+        top, bottom = QtGui.QColor(theme.color("surfaceRaised")), QtGui.QColor(theme.color("surfaceTertiary"))
+        top.setAlpha(255)
+        bottom.setAlpha(255)
+        gradient = QtGui.QLinearGradient(rect.topLeft(), rect.bottomLeft())
+        gradient.setColorAt(0.0, top)
+        gradient.setColorAt(1.0, bottom)
+        shape = QtGui.QPainterPath()
+        shape.addRoundedRect(rect, self.RADIUS, self.RADIUS)
+        painter.fillPath(shape, QtGui.QBrush(gradient))
+        # A faint wash of the toast's color from the left, under the icon.
+        wash = QtGui.QLinearGradient(rect.topLeft(), QtCore.QPointF(rect.left() + 140, rect.top()))
+        tint = QtGui.QColor(accent)
+        tint.setAlphaF(0.10)
+        wash.setColorAt(0.0, tint)
+        tint.setAlphaF(0.0)
+        wash.setColorAt(1.0, tint)
+        painter.fillPath(shape, QtGui.QBrush(wash))
+        painter.setPen(QtGui.QPen(theme.color("borderStrong"), 1))
+        painter.drawPath(shape)
+        painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 26), 1))  # the bright top edge of the glass
+        painter.drawLine(QtCore.QPointF(rect.left() + self.RADIUS, rect.top() + 1),
+                         QtCore.QPointF(rect.right() - self.RADIUS, rect.top() + 1))
+        # Tinted disc behind the icon.
+        disc = QtCore.QRectF(self._disc.geometry())
+        fill = QtGui.QColor(accent)
+        fill.setAlphaF(0.14)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(fill)
+        painter.drawEllipse(disc)
+        # Time left: a thin bar along the bottom, clipped to the rounded card.
+        share = max(0.0, min(1.0, self._left / float(self._lifetime)))
+        painter.setClipPath(shape)
+        bar = QtGui.QColor(accent)
+        bar.setAlphaF(0.75)
+        painter.fillRect(QtCore.QRectF(rect.left(), rect.bottom() - 2.5, rect.width() * share, 2.5), bar)
+        painter.end()
 
 
 def _ease(progress):
@@ -126,19 +251,21 @@ class StatusIcon(QtWidgets.QWidget):
     BOX_OUTLINE = ((12, 2), (21, 7), (21, 17), (12, 22), (3, 17), (3, 7), (12, 2))
     BOX_INNER = (((3, 7), (12, 12), (21, 7)), ((12, 12), (12, 22)))
 
-    def __init__(self, themes, parent=None):
+    def __init__(self, themes, size=SIZE, parent=None):
+        """Drawn on a 44 px grid and scaled to `size`."""
         QtWidgets.QWidget.__init__(self, parent)
         self.themes = themes
         self._state = "running"
         self._clock = QtCore.QElapsedTimer()
         self._clock.start()
-        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(int(1000 / self.FPS))
         self._timer.timeout.connect(self._tick)
 
     def set_state(self, state):
-        """'running', 'done' or 'error'."""
+        """'running', 'done', 'error', 'info' or 'warning'."""
         self._state = state
         self._clock.restart()
         if self.isVisible():
@@ -168,14 +295,20 @@ class StatusIcon(QtWidgets.QWidget):
     def paintEvent(self, _event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.scale(self.width() / float(self.SIZE), self.height() / float(self.SIZE))
         theme = self.themes.manager
         elapsed = self._elapsed()
+        progress = min(1.0, elapsed / self.ERROR_SECONDS)
         if self._state == "running":
             self._paint_running(painter, elapsed, theme.color("accent"))
         elif self._state == "done":
             self._paint_done(painter, min(1.0, elapsed / self.DONE_SECONDS), theme.color("success"))
+        elif self._state == "info":
+            self._paint_info(painter, progress, theme.color("accent"))
+        elif self._state == "warning":
+            self._paint_error(painter, progress, theme.color("warning"), hop=True)
         else:
-            self._paint_error(painter, min(1.0, elapsed / self.ERROR_SECONDS), theme.color("danger"))
+            self._paint_error(painter, progress, theme.color("danger"))
         painter.end()
 
     def _paint_running(self, painter, elapsed, accent):
@@ -232,12 +365,33 @@ class StatusIcon(QtWidgets.QWidget):
             painter.setPen(_round_pen(color, 3.0))
             painter.drawPath(path)
 
-    def _paint_error(self, painter, progress, color):
-        """The circle draws in, the "!" is drawn from the top, its dot pops in, and the icon shakes."""
+    def _paint_info(self, painter, progress, color):
+        """The circle draws in, the dot of the "i" pops in, then its stem grows downwards."""
+        ring_part = _ease(min(1.0, progress / 0.45))
+        stem_part = _ease(max(0.0, min(1.0, (progress - 0.5) / 0.35)))
+        ring = QtCore.QRectF(4, 4, self.SIZE - 8, self.SIZE - 8)
+        painter.setPen(_round_pen(color, 2.6))
+        painter.drawArc(ring, 90 * 16, int(-360.0 * ring_part * 16))
+        middle = self.SIZE / 2.0
+        if progress > 0.38:
+            pop = min(1.0, (progress - 0.38) / 0.12)
+            painter.setPen(_round_pen(color, 3.0 + 1.2 * math.sin(pop * math.pi)))
+            painter.drawPoint(QtCore.QPointF(middle, 14.5))
+        if stem_part > 0:
+            painter.setPen(_round_pen(color, 3.0))
+            painter.drawLine(QtCore.QPointF(middle, 20.5), QtCore.QPointF(middle, 20.5 + 9.5 * stem_part))
+
+    def _paint_error(self, painter, progress, color, hop=False):
+        """The circle draws in, the "!" is drawn from the top, its dot pops in, and the icon shakes (an error)
+        or makes a small hop (a warning)."""
         ring_part = _ease(min(1.0, progress / 0.45))
         bar_part = _ease(max(0.0, min(1.0, (progress - 0.35) / 0.3)))
-        shake = math.sin((progress - 0.45) * math.pi * 8) * 4.5 * (1.0 - progress) if progress > 0.45 else 0.0
-        painter.translate(shake, 0)
+        if hop:
+            lift = -math.sin(max(0.0, min(1.0, (progress - 0.6) / 0.3)) * math.pi) * 3.0 if progress > 0.6 else 0.0
+            painter.translate(0, lift)
+        else:
+            shake = math.sin((progress - 0.45) * math.pi * 8) * 4.5 * (1.0 - progress) if progress > 0.45 else 0.0
+            painter.translate(shake, 0)
         ring = QtCore.QRectF(4, 4, self.SIZE - 8, self.SIZE - 8)
         painter.setPen(_round_pen(color, 2.6))
         painter.drawArc(ring, 90 * 16, int(-360.0 * ring_part * 16))
@@ -1047,7 +1201,7 @@ class ManagerWindow(QtWidgets.QWidget):
             if not is_valid(toast) or not toast.isVisible():
                 continue
             toast.adjustSize()
-            toast.move(area.right() - toast.width() - 14, y)
+            toast.place(QtCore.QPoint(area.right() - toast.width() - 14, y))
             toast.raise_()
             y += toast.height() + 8
             alive.append(toast)
