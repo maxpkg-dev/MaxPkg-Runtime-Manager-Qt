@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+logs/
+dist/
+settings.json
+*.tmp
+docs/screenshots/*-manual.png
