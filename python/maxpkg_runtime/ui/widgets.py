@@ -1011,9 +1011,16 @@ def themed_menu(parent):
 
 
 class _DangerRow(QtWidgets.QWidget):
-    """One red menu row (QSS styles every QMenu item alike, so a destructive item paints itself)."""
+    """One red menu row (QSS styles every QMenu item alike, so a destructive item paints itself).
+
+    ICON_X, TEXT_X and HEIGHT match the ::item / ::icon paddings in manager.qss, measured against a normal item in
+    3ds Max (same icon, same text): change them together.
+    """
 
     triggered = Signal()
+    ICON_X = 9
+    TEXT_X = 37
+    PADDING = 7  # ::item vertical padding
 
     def __init__(self, text, icon_name, themes, parent=None):
         QtWidgets.QWidget.__init__(self, parent)
@@ -1023,10 +1030,10 @@ class _DangerRow(QtWidgets.QWidget):
         self.setMouseTracking(True)
         self.setAttribute(Qt.WA_Hover)
         self.setMinimumWidth(150)
-        self.setFixedHeight(self.fontMetrics().height() + 14)
+        self.setFixedHeight(max(16, self.fontMetrics().height()) + 2 * self.PADDING + 1)
 
     def sizeHint(self):
-        return QtCore.QSize(16 + 16 + 10 + self.fontMetrics().horizontalAdvance(self.text) + 24, self.height())
+        return QtCore.QSize(self.TEXT_X + self.fontMetrics().horizontalAdvance(self.text) + 14, self.height())
 
     def event(self, event):
         if event.type() in (QtCore.QEvent.HoverEnter, QtCore.QEvent.HoverLeave):
@@ -1044,12 +1051,12 @@ class _DangerRow(QtWidgets.QWidget):
         if self.underMouse():
             painter.setPen(Qt.NoPen)
             painter.setBrush(theme.color("dangerSurface"))
-            painter.drawRoundedRect(QtCore.QRectF(self.rect()).adjusted(4, 1, -4, -1), 7, 7)
+            painter.drawRoundedRect(QtCore.QRectF(self.rect()), 7, 7)  # the same shape as ::item:selected
         glyph = icons.pixmap(self.icon_name, theme.color("iconDanger"), 16, self.devicePixelRatioF())
-        painter.drawPixmap(QtCore.QPointF(16, (self.height() - 16) / 2.0), glyph)
+        painter.drawPixmap(QtCore.QPointF(self.ICON_X, (self.height() - 16) / 2.0), glyph)
         painter.setPen(theme.color("dangerText"))
-        painter.drawText(QtCore.QRect(42, 0, self.width() - 42, self.height()), int(Qt.AlignLeft | Qt.AlignVCenter),
-                         self.text)
+        painter.drawText(QtCore.QRect(self.TEXT_X, 0, self.width() - self.TEXT_X, self.height()),
+                         int(Qt.AlignLeft | Qt.AlignVCenter), self.text)
         painter.end()
 
 

@@ -233,11 +233,13 @@ QPushButton#GalleryNav:hover { border-color: @accentHover; }
 QMenu#ContextMenu {
     border: 1px solid @textDisabled; border-radius: 10px; background: @surfaceTertiary; padding: 4px;
 }
-QMenu#ContextMenu::item { color: @textPrimary; padding: 6px 12px 6px 10px; border-radius: 7px; min-width: 150px; }
+/* Measured in Max: the icon starts 12 px inside the highlight, the text 10 px after the icon
+   (widgets.add_danger_action paints its red row at the same offsets). */
+QMenu#ContextMenu::item { color: @textPrimary; padding: 7px 14px 7px 17px; border-radius: 7px; min-width: 150px; }
 QMenu#ContextMenu::item:selected { background: @borderStrong; color: @textStrong; }
 QMenu#ContextMenu::item:disabled { color: @textDisabled; }
 QMenu#ContextMenu::separator { height: 1px; background: @borderDefault; margin: 4px 6px; }
-QMenu#ContextMenu::icon { padding-left: 6px; }
+QMenu#ContextMenu::icon { padding-left: 18px; }
 
 /* ---------- overlays ---------- */
 #BusyShade { background: @backgroundOverlay; }
