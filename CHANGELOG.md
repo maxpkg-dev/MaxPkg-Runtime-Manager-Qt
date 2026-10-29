@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.1
+
+- Fixed: The Screenshots and Changelog counts in package details sit right after their tab titles, under the same underline.
+- Changed: A new toolbar starts at the top with large icons only; Reset toolbar defaults returns to this look.
+
 ## 2.0.0
 
 - Added: The Manager, toolbar and Settings run on the Qt and Python that ship with 3ds Max, without the embedded web browser.

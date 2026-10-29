@@ -23,7 +23,8 @@ _FIELDS = (
     ("toolbar_brand_divider_added", "Toolbar", "BrandDividerAdded", "bool", False, None),
     ("toolbar_title_mode", "Toolbar", "TitleMode", "choice", "packageName", ("packageName", "buttonName")),
     ("toolbar_subtitle_mode", "Toolbar", "SubtitleMode", "choice", "version", ("none", "version", "developer")),
-    ("toolbar_button_size", "Toolbar", "ButtonSize", "choice", "medium", ("icon", "small", "medium", "large")),
+    # A new toolbar starts as large icons only, like 3ds Max's own toolbars.
+    ("toolbar_button_size", "Toolbar", "ButtonSize", "choice", "icon", ("icon", "small", "medium", "large")),
     ("toolbar_dock_position", "Toolbar", "DockPosition", "choice", "top", DOCK_POSITIONS),
     ("toolbar_density", "Toolbar", "Density", "choice", "regular", ("regular", "compact")),
     ("toolbar_icon_size", "Toolbar", "IconSize", "choice", "large", ("small", "medium", "large")),

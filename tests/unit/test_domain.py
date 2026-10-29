@@ -48,7 +48,7 @@ class SettingsTests(unittest.TestCase):
         settings = Settings.load(path)
         self.assertEqual(settings.toolbar_dock_position, "top")
         self.assertEqual(settings.toolbar_density, "compact")
-        self.assertEqual(settings.toolbar_button_size, "medium")
+        self.assertEqual(settings.toolbar_button_size, "icon")  # an unknown value falls back to the default
         self.assertEqual(settings.update_frequency_hours, 24)
         self.assertEqual(settings.manager_sort, "name")
         self.assertTrue(settings.toolbar_visible)
@@ -63,6 +63,12 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.toolbar_order, ["G1", "G2"])
         self.assertTrue(settings.is_hidden("g3"))
         self.assertEqual(Settings.load(target).manager_theme, "forest-green")
+
+    def test_new_toolbar_defaults(self):
+        # Top, regular spacing, large icons, icons only.
+        settings = Settings.load(os.path.join(self.folder, "missing.ini"))
+        self.assertEqual((settings.toolbar_dock_position, settings.toolbar_density, settings.toolbar_icon_size,
+                          settings.toolbar_button_size), ("top", "regular", "large", "icon"))
 
     def test_endpoint(self):
         self.assertEqual(normalize_endpoint(" https://example.test/api "), "https://example.test/api/")

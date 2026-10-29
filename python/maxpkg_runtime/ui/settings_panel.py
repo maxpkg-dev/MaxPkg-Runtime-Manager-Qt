@@ -421,7 +421,7 @@ class SettingsPanel(QtWidgets.QWidget):
             self._set("api_endpoint", value, "endpoint")
 
     TOOLBAR_DEFAULTS = (("toolbar_visible", True), ("toolbar_title_mode", "packageName"),
-                        ("toolbar_subtitle_mode", "version"), ("toolbar_button_size", "medium"),
+                        ("toolbar_subtitle_mode", "version"), ("toolbar_button_size", "icon"),
                         ("toolbar_dock_position", "top"), ("toolbar_density", "regular"),
                         ("toolbar_icon_size", "large"), ("hidden_packages", []))
 
