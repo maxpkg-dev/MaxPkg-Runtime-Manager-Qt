@@ -1,5 +1,7 @@
 """Package Details page: hero, purchase notice, Description/Screenshots/Changelog tabs, information table."""
 
+import math
+
 from ..domain import markdown
 from ..domain.packages import compact_number
 from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal
@@ -367,19 +369,10 @@ class DetailsPage(ScrollPage):
             tabs.append(("screenshots", "Screenshots", shots))
         tabs.append(("changelog", "Changelog", len(package.changelog)))
         for key, text, count in tabs:
-            button = QtWidgets.QPushButton(text)
-            button.setObjectName("DetailsTab")
-            button.setCheckable(True)
+            button = DetailsTab(text, count)
             button.setChecked(key == self.tab)
-            button.setCursor(Qt.PointingHandCursor)
             button.clicked.connect(lambda _checked=False, value=key: self._select_tab(value))
             row.addWidget(button)
-            if count is not None:
-                counter = label(str(count), "DetailsTabCount")
-                counter.setFixedHeight(16)
-                counter.setAlignment(Qt.AlignCenter)
-                row.addWidget(counter, 0, Qt.AlignVCenter)
-                row.addSpacing(13)
         row.addStretch(1)
         return row
 
@@ -564,6 +557,60 @@ class DetailsPage(ScrollPage):
             row.overlay(button)
         row.setLayout(layout)
         return row
+
+
+class DetailsTab(QtWidgets.QPushButton):
+    """Description / Screenshots / Changelog tab. The count sits inside the tab, right after its title, so the
+    underline runs under both (like the Discover / Installed / Updates tabs)."""
+
+    GAP = 6  # px between the title and the count
+
+    def __init__(self, text, count=None, parent=None):
+        QtWidgets.QPushButton.__init__(self, text, parent)
+        self.setObjectName("DetailsTab")
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self._text = text
+        self.counter = None
+        if count is not None:
+            self.counter = label(str(count), "DetailsTabCount", parent=self)
+            self.counter.setFixedHeight(16)
+            self.counter.setAlignment(Qt.AlignCenter)
+            self.counter.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def showEvent(self, event):
+        QtWidgets.QPushButton.showEvent(self, event)
+        self._reserve()
+
+    def _reserve(self):
+        """Trailing spaces make room for the count, so the stylesheet still draws the title (and its hover and
+        checked colours) and the tab, with its underline, is as wide as title and count together."""
+        if self.counter is None:
+            return
+        self.counter.ensurePolished()
+        width = self.counter.sizeHint().width()
+        space = max(1, self.fontMetrics().horizontalAdvance(" "))
+        text = self._text + " " * int(math.ceil((self.GAP + width) / float(space)))
+        if text != self.text():
+            self.setText(text)
+        self._place()
+
+    def _place(self):
+        if self.counter is None:
+            return
+        width = self.counter.sizeHint().width()
+        option = QtWidgets.QStyleOptionButton()
+        self.initStyleOption(option)
+        # The button centres its text in the contents rect (inside the stylesheet's margin and padding).
+        content = self.style().subElementRect(QtWidgets.QStyle.SE_PushButtonContents, option, self)
+        text_width = self.fontMetrics().horizontalAdvance(self.text())
+        left = content.left() + (content.width() - text_width) // 2
+        self.counter.setGeometry(left + self.fontMetrics().horizontalAdvance(self._text) + self.GAP,
+                                 (self.height() - 16) // 2, width, 16)
+
+    def resizeEvent(self, event):
+        QtWidgets.QPushButton.resizeEvent(self, event)
+        self._place()
 
 
 class InfoRow(QtWidgets.QFrame):
