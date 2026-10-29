@@ -277,6 +277,7 @@ QPushButton#SettingsNavButton:hover, QPushButton#SettingsNavButton:checked { bac
 QPushButton#SettingsNavButton[danger="true"] { color: @dangerText; }
 QPushButton#SettingsNavButton[danger="true"]:checked { background: @dangerSurface; }
 #PageTitle { color: @textStrong; font-size: 14px; font-weight: bold; }
+#SupportText { color: @textSecondary; }
 #FieldLabel { color: @textPrimary; }
 #ConfigLabel { color: @textStrong; font-size: 12px; font-weight: bold; }
 #ConfigPanel, #PreviewPanel { border: 1px solid @borderDefault; border-radius: 12px; background: @surfaceSecondary; }

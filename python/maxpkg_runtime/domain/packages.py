@@ -300,11 +300,13 @@ def toolbar_entries(packages, order, is_hidden):
 
 
 def compact_number(value):
+    """1139 -> '1.1K', 2500000 -> '2.5M' (one decimal, dropped when zero)."""
     value = max(0, int(value or 0))
-    if value >= 1000000:
+    thousands = round(value / 100.0) / 10.0
+    if value >= 1000000 or thousands >= 1000:  # 999950 rounds to 1000K: show it as 1M
         return "{:g}M".format(round(value / 100000.0) / 10.0)
     if value >= 1000:
-        return "{:g}K".format(round(value / 100.0) / 10.0)
+        return "{:g}K".format(thousands)
     return str(value)
 
 

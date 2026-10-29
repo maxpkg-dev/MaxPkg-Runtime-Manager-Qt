@@ -11,7 +11,7 @@ from ..qt_compat import (QShortcut, QtCore, QtGui, QtWidgets, Qt, Signal, disabl
                          is_valid)
 from . import icons
 from .details import SINGLE_COLUMN, DetailsPage
-from .dialogs import confirm
+from .dialogs import ask_support, confirm
 from .frame import (EDGE, WindowChrome, apply_native_frame, bounded_position, glass_border, native_event,
                     paint_window_shape, prepare_window)
 from .pages import WIDE_DISCOVER, DiscoverPage, InstalledPage
@@ -20,7 +20,7 @@ from .widgets import (BrandLogo, Button, ClearableDropdown, IconButton, IconLabe
                       add_danger_action, add_menu_title, hbox, label, themed_menu, vbox)
 
 MIN_WIDTH = 680
-HEADER_ICON_ONLY = 800  # 720 in the HTML Manager; the header now also holds the window buttons
+HEADER_ICON_ONLY = 850  # 720 in the HTML Manager; the header now also holds the window and Support buttons
 DISCOVER_SORTS = (("popular", "Popular"), ("newest", "Newest"), ("rating", "Rating"), ("downloads", "Downloads"),
                   ("name", "Name"))
 INSTALLED_SORTS = (("toolbar", "Toolbar order"), ("name", "Name"), ("developer", "Developer"), ("version", "Version"))
@@ -682,6 +682,8 @@ class ManagerWindow(QtWidgets.QWidget):
         self.configurator_button = Button("Toolbar Configurator", "panel-top", "default", themes)
         self.check_button = Button("Check Updates", "refresh-cw", "default", themes)
         self.update_all_button = Button("Update All", "download", "primary", themes)
+        self.support_button = IconButton("heart", "Support MaxPkg", themes)
+        themes.bind_icon(self.support_button, "heart", "iconSuccess", 16)
         self.settings_button = IconButton("settings", "Settings", themes)
         self._header_buttons = (self.configurator_button, self.check_button, self.update_all_button)
         brand_block = QtWidgets.QWidget()
@@ -694,7 +696,8 @@ class ManagerWindow(QtWidgets.QWidget):
         divider.setFixedSize(1, 24)
         chrome_buttons = self.chrome.window_buttons("Close MaxPkg Manager")
         header.setLayout(hbox(brand_block, None, self.configurator_button, self.check_button,
-                              self.update_all_button, self.settings_button, 4, divider, 4, *chrome_buttons,
+                              self.update_all_button, self.support_button, self.settings_button, 4, divider, 4,
+                              *chrome_buttons,
                               spacing=12, margins=(15, 13, 10, 13)))
         self.chrome.attach_title_bar(header)
 
@@ -785,6 +788,7 @@ class ManagerWindow(QtWidgets.QWidget):
             button.clicked.connect(lambda _checked=False, tab=key: self.show_tab(tab))
         self.configurator_button.clicked.connect(lambda: self.open_settings("toolbar"))
         self.settings_button.clicked.connect(lambda: self.open_settings(""))  # reopens the last page
+        self.support_button.clicked.connect(self.ask_support)
         self.check_button.clicked.connect(lambda: runtime.check_updates(True))
         self.update_all_button.clicked.connect(runtime.update_all)
         self.website.clicked.connect(lambda: runtime.open_link(_SITE, "homepage"))
@@ -1048,6 +1052,11 @@ class ManagerWindow(QtWidgets.QWidget):
 
     def open_settings(self, page=""):
         self.settings_panel.open_page(page)
+
+    def ask_support(self):
+        """Header heart: why MaxPkg needs donations; Donate opens the donation page in the browser."""
+        if ask_support(self, self.themes):
+            self.runtime.open_link(_SITE, "purchase")
 
     # --- actions used by cards/pages ------------------------------------------------
     def run(self, guid):
@@ -1345,10 +1354,11 @@ class ManagerWindow(QtWidgets.QWidget):
 
 
 class _Site:
-    """Pseudo package so the footer link reuses Runtime.open_link."""
+    """Pseudo package so the footer link and the header's Support button reuse Runtime.open_link."""
 
     homepage_url = "https://maxpkg.dev"
-    documentation_url = support_url = purchase_url = license_url = ""
+    purchase_url = "https://store.payproglobal.com/checkout?products[1][id]=137822"  # MaxPkg donation
+    documentation_url = support_url = license_url = ""
     slug = guid = ""
 
 

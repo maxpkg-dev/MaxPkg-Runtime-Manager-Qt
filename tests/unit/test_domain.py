@@ -90,6 +90,10 @@ class PackageTests(unittest.TestCase):
         self.assertFalse(is_newer("1.0", "1.0.0"))
         self.assertEqual(compact_number(10700), "10.7K")
         self.assertEqual(compact_number(796), "796")
+        self.assertEqual(compact_number(1000), "1K")
+        self.assertEqual(compact_number(1139), "1.1K")
+        self.assertEqual(compact_number(999950), "1M")
+        self.assertEqual(compact_number(2500000), "2.5M")
 
     def test_toolbar_order(self):
         packages = [Package(guid="A", name="a"), Package(guid="B", name="b"), Package(guid="C", name="c")]

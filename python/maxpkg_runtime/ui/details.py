@@ -1,6 +1,7 @@
 """Package Details page: hero, purchase notice, Description/Screenshots/Changelog tabs, information table."""
 
 from ..domain import markdown
+from ..domain.packages import compact_number
 from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal
 from ..services.images import rounded
 from .cards import PackageIcon
@@ -516,7 +517,9 @@ class DetailsPage(ScrollPage):
                 ("License", package.license_type), ("Integration", integration), ("Packager", packager)]
         if package.is_remote or package.details_loaded:  # catalog stats; a package only known locally has none
             layout.addWidget(self._rating_row(package))
-            layout.addWidget(self._info_row("Downloads", "{:,}".format(package.download_count), icon="download"))
+            downloads = self._info_row("Downloads", compact_number(package.download_count), icon="download")
+            downloads.findChild(QtWidgets.QLabel, "InfoValue").setToolTip("{:,} downloads".format(package.download_count))
+            layout.addWidget(downloads)
         identifier = package.slug or package.guid
         if identifier:
             layout.addWidget(self._info_row("Package ID", identifier, copy=True))
