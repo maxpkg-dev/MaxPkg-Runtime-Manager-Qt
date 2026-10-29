@@ -6,6 +6,8 @@ itself is never destroyed while the Runtime runs. Package buttons look like the 
 (icon, name, version/developer line, update badge on the maxpkg button) but are painted by Qt.
 """
 
+import math
+
 from ..domain.packages import DIVIDER, is_divider
 from ..qt_compat import (QAction, QtCore, QtGui, QtWidgets, Qt, Signal, event_global_pos, exec_menu, is_valid,
                          max_main_window, screen_at)
@@ -22,6 +24,7 @@ ICON_LENGTHS = {("small", "regular"): 22, ("medium", "regular"): 26, ("large", "
                 ("small", "compact"): 18, ("medium", "compact"): 22, ("large", "compact"): 26}
 BRAND_WIDTH = 96
 GRIP = 17
+UPDATE_DOT = 6.0  # px: a package's update dot at the right end of a text button
 
 
 # Toolbar look choices offered in the maxpkg button menu: (setting, title, icon, ((value, text), ...)).
@@ -118,15 +121,61 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         self.item = item
         self.style_info = style
         self.theme = toolbar_theme
-        size = style.brand_size() if self.brand else style.button
-        self.setFixedSize(size)
+        self.setFixedSize(self._size())
         self.setToolTip(item.tooltip)
         self.update()
 
     def set_badge(self, count):
+        """Update count on the maxpkg button. It never covers the logo: the button grows to hold it beside the
+        logo (the caller lays the toolbar out again)."""
         if count != self.badge_count:
             self.badge_count = count
+            self.setFixedSize(self._size())
             self.update()
+
+    def _size(self):
+        style = self.style_info
+        if not self.brand:
+            return QtCore.QSize(style.button)
+        size = style.brand_size()
+        if self.badge_count:
+            pill = self._badge_metrics()[2]
+            if not style.icon_only:
+                # logo, name, then the count close after it: wide enough for all three, never narrower than usual
+                name = QtGui.QFontMetricsF(self._name_font()).horizontalAdvance("maxpkg")
+                needed = 7 + 20 + 6 + name + 6 + pill.width() + 5
+                size.setWidth(max(size.width(), int(math.ceil(needed))))
+            elif style.vertical:
+                size.setHeight(size.height() + int(math.ceil(pill.height())) + 2)
+            else:
+                size.setWidth(size.width() + int(math.ceil(pill.width())) + 2)
+        return size
+
+    def _name_font(self):
+        font = QtGui.QFont(self.font())
+        font.setPixelSize(10 if self.style_info.button.height() <= 30 else 11)
+        font.setBold(True)
+        return font
+
+    def _badge_metrics(self):
+        """(text, font, pill size) of the maxpkg button's update count, sized to the button."""
+        style = self.style_info
+        count = self.badge_count
+        if style.icon_only:
+            height = max(12, min(16, int(round(style.length * 0.6))))
+            font_size = height - 4
+        else:
+            height, font_size = 16, 10
+        text = str(count) if count < 100 else "99+"
+        if style.icon_only and style.vertical and count > 9:
+            text = "9+"  # the pill sits under the logo and may not be wider than the toolbar
+        font = QtGui.QFont(self.font())
+        font.setPixelSize(font_size)
+        font.setBold(True)
+        width = max(float(height), QtGui.QFontMetricsF(font).horizontalAdvance(text) + 8.0)
+        if style.icon_only and style.vertical:
+            width = min(width, float(style.length))
+        return text, font, QtCore.QSizeF(width, height)
 
     def _on_image(self, source):
         if source == self.item.icon_source:
@@ -157,19 +206,34 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         if not style.icon_only:
             self._paint_text(painter, icon_rect, hovered)
         if self.brand and self.badge_count:
-            self._paint_badge(painter, str(self.badge_count))
+            self._paint_badge(painter)
         elif not self.brand and self.item.update_available:
-            painter.setPen(QtGui.QPen(theme.color("updateBadgeBorder"), 1))
-            painter.setBrush(theme.color("updateBadgeBackground"))
-            painter.drawEllipse(QtCore.QRectF(self.width() - 9, 2, 7, 7))
+            self._paint_update_mark(painter, icon_rect)
         painter.end()
 
     def _icon_rect(self):
         style = self.style_info
         size = style.icon if not self.brand or style.icon_only else 20
         if style.icon_only:
-            return QtCore.QRect((self.width() - size) // 2, (self.height() - size) // 2, size, size)
+            # Centred in the square part; a maxpkg button with updates is longer and keeps its count beside it.
+            length = style.length
+            return QtCore.QRect((length - size) // 2, (length - size) // 2, size, size)
         return QtCore.QRect(7, (self.height() - size) // 2, size, size)
+
+    def _paint_update_mark(self, painter, icon_rect):
+        """A package with an update, never over its icon: a dot at the right end of a text button, a short bar
+        in the free strip under the icon of an icon-only button."""
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self.theme.color("updateBadgeBackground"))
+        if self.style_info.icon_only:
+            bar = max(6.0, icon_rect.width() * 0.5)
+            thickness = max(1.5, min(2.0, float(self.height() - icon_rect.bottom() - 1)))
+            painter.drawRoundedRect(QtCore.QRectF((self.width() - bar) / 2.0, self.height() - thickness, bar,
+                                                  thickness), thickness / 2.0, thickness / 2.0)
+            return
+        painter.setPen(QtGui.QPen(self.theme.color("updateBadgeBorder"), 1))
+        painter.drawEllipse(QtCore.QRectF(self.width() - 5 - UPDATE_DOT, (self.height() - UPDATE_DOT) / 2.0,
+                                          UPDATE_DOT, UPDATE_DOT))
 
     def _paint_icon(self, painter, rect):
         dpr = self.devicePixelRatioF()
@@ -201,10 +265,12 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         boxes: Segoe UI line boxes carry extra leading that pushed the HTML-sized text off centre."""
         left = icon_rect.right() + 6
         width = self.width() - left - 5
+        if self.brand and self.badge_count:
+            width -= self._badge_metrics()[2].width() + 4  # the count sits after the name
+        elif not self.brand and self.item.update_available:
+            width -= UPDATE_DOT + 4
         compact = self.height() <= 30
-        name_font = QtGui.QFont(self.font())
-        name_font.setPixelSize(10 if compact else 11)
-        name_font.setBold(True)
+        name_font = self._name_font()
         color = self.theme.color("buttonHoverText" if hovered else "buttonText")
         title = self.item.title if not self.brand else "maxpkg"
         subtitle = "" if self.brand else self.item.subtitle
@@ -234,16 +300,21 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         painter.drawText(QtCore.QPointF(left, round(sub_baseline)),
                          sub_metrics.elidedText(subtitle, Qt.ElideRight, width))
 
-    def _paint_badge(self, painter, text):
-        font = QtGui.QFont(self.font())
-        font.setPixelSize(10)
-        font.setBold(True)
-        metrics = QtGui.QFontMetrics(font)
-        width = max(16, metrics.horizontalAdvance(text) + 8)
-        rect = QtCore.QRectF(self.width() - width - 1, 1, width, 16)
+    def _paint_badge(self, painter):
+        """The update count beside the logo: after the name on a text button, after (horizontal) or under
+        (vertical) the logo on an icon-only one."""
+        text, font, pill = self._badge_metrics()
+        style = self.style_info
+        if not style.icon_only:
+            origin = QtCore.QPointF(self.width() - pill.width() - 5, (self.height() - pill.height()) / 2.0)
+        elif style.vertical:
+            origin = QtCore.QPointF((self.width() - pill.width()) / 2.0, style.length)
+        else:
+            origin = QtCore.QPointF(style.length, (self.height() - pill.height()) / 2.0)
+        rect = QtCore.QRectF(origin, pill).adjusted(0.5, 0.5, -0.5, -0.5)
         painter.setPen(QtGui.QPen(self.theme.color("updateBadgeBorder"), 1))
         painter.setBrush(self.theme.color("updateBadgeBackground"))
-        painter.drawRoundedRect(rect, 8, 8)
+        painter.drawRoundedRect(rect, rect.height() / 2.0, rect.height() / 2.0)
         painter.setFont(font)
         painter.setPen(self.theme.color("updateBadgeText"))
         painter.drawText(rect, Qt.AlignCenter, text)
