@@ -6,6 +6,7 @@ Layout, texts and responsive breakpoints follow the HTML Manager 1.2.0 (docs/ORI
 import math
 import os
 
+from ..domain.messages import without_links
 from ..services import max_api
 from ..qt_compat import (QShortcut, QtCore, QtGui, QtWidgets, Qt, Signal, disable_max_accelerators, exec_menu,
                          is_valid)
@@ -88,7 +89,7 @@ class Toast(QtWidgets.QFrame):
         disc_layout = hbox(self.icon, margins=(6, 6, 6, 6))
         disc.setLayout(disc_layout)
         self._disc = disc
-        lines = (text or "").split("\n", 1)
+        lines = (without_links(text) or "").split("\n", 1)  # never a raw web address in a notification
         # Wrapped labels get an exact width, or the nested layout sizes them for a narrower one (gaps).
         text_width = self.WIDTH - 12 - 40 - 12 - 12 - 22 - 10
         title = label(lines[0], "ToastTitle", wrap=True)

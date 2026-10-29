@@ -39,12 +39,14 @@ def get_dir(name):
 
 
 def run_package(package):
-    """Run the package entry exactly like core/launcher.ms. Returns (ok, message)."""
+    """Run the package entry exactly like core/launcher.ms. Returns (ok, message): the message is for the user (no
+    paths); the details go to the log."""
     entry_path = os.path.join(package.install_path, package.entry)
     if not os.path.isfile(entry_path):
-        return False, "Entry file not found: " + entry_path
+        log.error("launcher", package.guid + ": entry file not found: " + entry_path)
+        return False, "Its start file is missing. Install it again from Discover."
     if rt is None:
-        return False, "3ds Max is not available"
+        return False, "3ds Max is not available."
     try:
         if package.runtime.lower() == "python" or entry_path.lower().endswith(".py"):
             rt.python.ExecuteFile(entry_path)
@@ -52,7 +54,7 @@ def run_package(package):
             rt.fileIn(entry_path)
     except Exception as error:  # noqa: BLE001 - a failing package must not break the Runtime
         log.error("launcher", package.guid + ": " + str(error))
-        return False, str(error)
+        return False, "The script stopped with an error. The MaxScript Listener shows the details."
     log.info("launcher", "Ran " + package.guid)
     return True, ""
 

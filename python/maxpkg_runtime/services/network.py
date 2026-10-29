@@ -17,6 +17,7 @@ import os
 import shutil
 import tempfile
 
+from ..domain.messages import without_links
 from ..qt_compat import BINDING, QtCore
 from . import log
 
@@ -37,12 +38,14 @@ class NetworkError(Exception):
 
 
 def describe(error):
-    """Short user-facing text for a failed request."""
+    """Short user-facing text for a failed request: no addresses or file paths (the log keeps the details)."""
     if isinstance(error, NetworkError):
         if error.status:
             return "The server answered HTTP {}.".format(error.status)
         return "The MaxPkg service could not be reached."
-    return str(error) or error.__class__.__name__
+    if isinstance(error, OSError):  # str() of an OSError names the file, and so the Windows user name
+        return "The download could not be saved: {}.".format((error.strerror or "disk error").rstrip("."))
+    return without_links(str(error)) or error.__class__.__name__
 
 
 def curl_executable():

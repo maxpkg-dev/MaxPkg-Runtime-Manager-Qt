@@ -132,7 +132,9 @@ class Runtime(QtCore.QObject):
             self.settings.save()
         except OSError as error:
             log.error("settings", "Could not save settings: " + str(error))
-            self.say("Settings could not be saved: " + str(error), "error")
+            # str(error) names the file (and so the Windows user name): the toast only gives the reason.
+            reason = (error.strerror or "The settings file could not be written") + "."
+            self.say("Settings could not be saved.\n" + reason, "error")
             return False
         self.settings_changed.emit(area)
         return True
@@ -453,19 +455,24 @@ class Runtime(QtCore.QObject):
         self.operation = ""
         self.busy_changed.emit("")
 
-    def install(self, reference, on_done=None, updating=False):
+    def install(self, reference, on_done=None, updating=False, previous=None):
         """Resolve (API) and download asynchronously, then fileIn the MZP on the main thread and verify.
-        `updating`: the package is installed over an older version (the messages say "updated")."""
+        `updating`: the package is installed over an older version (the messages say "updated").
+        `previous`: the installed package being updated; it gives the GUID, name and old version when `reference`
+        is a download URL (the downloaded file's name says nothing about the package)."""
         reference = (reference or "").strip()
         if not reference or not self._begin("Updating package..." if updating else "Installing package..."):
             return False
         max_year = self.max_year
-        retry = [("Try Again", "refresh-cw", lambda: self.install(reference, updating=updating))]
+        retry = [("Try Again", "refresh-cw", lambda: self.install(reference, updating=updating, previous=previous))]
+        is_location = reference.lower().startswith(("http://", "https://")) or os.path.isfile(reference)
+        # Messages name the package, never a URL or file path.
+        fallback_name = previous.display_name if previous is not None else ("The package" if is_location else reference)
 
         def failed(error):
             self._finish()
             message = error.message if isinstance(error, api.ApiError) else network.describe(error)
-            self.say(("Package could not be updated.\n" if updating else "Package could not be installed.\n") + message,
+            self.say("{} could not be {}.\n{}".format(fallback_name, "updated" if updating else "installed", message),
                      "error", retry)
             if on_done:
                 on_done(False)
@@ -490,19 +497,22 @@ class Runtime(QtCore.QObject):
                 failed(error)
                 return
             path, guid, temporary = result
-            guid = guid or _guid_from_file_name(path)
+            guid = guid or (previous.guid if previous is not None else "") or _guid_from_file_name(path)
             ok = self._install_file(path, guid)
             if temporary:
                 _remove_file(path)
             self._finish()
             package = self.package(guid) if guid else None
-            label = package.display_name if package else reference
+            label = package.display_name if package else fallback_name
             if ok:
                 run = [("Run", "play", lambda: self.run(package.guid)),
                        ("Details", "info", lambda: self.details_requested.emit(package.guid))] if package else []
                 if updating:
-                    self.say("{} was updated to {}.".format(label, package.version if package else "the new version"),
-                             "success", run)
+                    # Same shape as "An update is available.": the name, then old → new version.
+                    old = previous.version if previous is not None else ""
+                    new = package.version if package else ""
+                    versions = "{} → {}".format(old, new) if old and new and old != new else (new and "Version " + new)
+                    self.say("{} was updated.".format(label) + ("\n" + versions if versions else ""), "success", run)
                 else:
                     on_toolbar = (package is not None and self.settings.toolbar_visible
                                   and self.is_on_toolbar(package))
@@ -514,8 +524,8 @@ class Runtime(QtCore.QObject):
             if on_done:
                 on_done(ok)
 
-        if reference.lower().startswith(("http://", "https://")) or os.path.isfile(reference):
-            fetch(reference, "")
+        if is_location:
+            fetch(reference, previous.guid if previous is not None else "")
         else:
             self._post(api.resolve_request(reference, max_year, self.version, self.api_channel),
                        lambda text: api.parse_details(text, max_year), resolved)
@@ -539,7 +549,7 @@ class Runtime(QtCore.QObject):
         if package is None or not package.update_available:
             self.say("No compatible package update is available.", "info")
             return False
-        return self.install(package.download_url or package.guid, on_done, updating=True)
+        return self.install(package.download_url or package.guid, on_done, updating=True, previous=package)
 
     def update_all(self):
         pending = [package.guid for package in self.packages if package.update_available]
@@ -572,11 +582,12 @@ class Runtime(QtCore.QObject):
         return False
 
     def _uninstall(self, package):
-        """Same order and safety checks as core/uninstaller.ms."""
+        """Same order and safety checks as core/uninstaller.ms. Returns (ok, message): the message is for the user
+        (no paths or GUIDs); the details go to the log."""
         problem = self._unsafe_folder(package)
         if problem:
             log.error("uninstaller", problem)
-            return False, problem
+            return False, "Its folder is not a normal package folder, so nothing was deleted."
         hook = os.path.join(package.install_path, package.uninstall_script or "")
         try:
             _clear_read_only(max_api.get_dir("userStartupScripts"))
@@ -590,7 +601,7 @@ class Runtime(QtCore.QObject):
                     return False, "Quad Menu commands could not be removed."
         except Exception as error:  # noqa: BLE001
             log.error("uninstaller", "Hook failed for " + package.guid + ": " + str(error))
-            return False, str(error)
+            return False, "Its uninstall script stopped with an error. The MaxScript Listener shows the details."
         macros = max_api.get_dir("userMacros")
         icons = max_api.get_dir("userIcons")
         startup = max_api.get_dir("userStartupScripts")
@@ -605,11 +616,13 @@ class Runtime(QtCore.QObject):
                          if name.lower().startswith(prefix) and name.lower().endswith(".mcr"))
         for path in files:
             if path and not _remove_file(path):
-                return False, "Could not remove " + path
+                log.error("uninstaller", "Could not remove " + path)
+                return False, "One of its 3ds Max files is in use. Restart 3ds Max and try again."
         try:
             shutil.rmtree(package.install_path, onerror=_force_remove)
         except OSError as error:
-            return False, "Could not remove the package folder: " + str(error)
+            log.error("uninstaller", "Could not remove the package folder: " + str(error))
+            return False, "Its folder could not be removed completely. Restart 3ds Max and try again."
         return not os.path.isdir(package.install_path), ""
 
     def _unsafe_folder(self, package):

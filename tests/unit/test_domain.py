@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from maxpkg_runtime.domain import api, markdown
+from maxpkg_runtime.domain.messages import without_links
 from maxpkg_runtime.domain.ini import IniDocument
 from maxpkg_runtime.domain.packages import (DIVIDER, Package, compact_number, is_newer, merge_visible_order,
                                             normalized_order, ordered_for_toolbar, scan, toolbar_entries,
@@ -163,6 +164,17 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(fields["featured"], "true")
         self.assertEqual(fields["category"], "")
         self.assertEqual(request.url("https://maxpkg.dev/api/runtime/v1/"), "https://maxpkg.dev/api/runtime/v1/catalog")
+
+
+class MessageTests(unittest.TestCase):
+    def test_notifications_have_no_links(self):
+        self.assertEqual(without_links("Prune Scene was updated.\n3.7.42 → 3.7.43"), "Prune Scene was updated.\n3.7.42 → 3.7.43")
+        self.assertEqual(without_links("Package could not be installed.\nError transferring "
+                                       "https://maxpkg.dev/api/runtime/v1/download/package/x/2.2.0 - server replied: Not Found"),
+                         "Package could not be installed.\nError transferring - server replied: Not Found")
+        self.assertEqual(without_links("https://maxpkg.dev/a/b was updated."), "was updated.")
+        self.assertEqual(without_links("Opened the page (www.example.test/x).\nThank you."), "Opened the page.\nThank you.")
+        self.assertEqual(without_links("Only a link:\nhttps://a.test/x"), "Only a link")
 
 
 class MarkdownTests(unittest.TestCase):
