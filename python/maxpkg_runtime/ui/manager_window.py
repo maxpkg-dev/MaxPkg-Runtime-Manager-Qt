@@ -788,7 +788,7 @@ class ManagerWindow(QtWidgets.QWidget):
         self.website = QtWidgets.QPushButton("maxpkg.dev")
         self.website.setObjectName("StatusLink")
         self.website.setCursor(Qt.PointingHandCursor)
-        self.website.setToolTip("Open maxpkg.dev in your browser")
+        self.website.setToolTip("Open the maxpkg.dev catalog in your browser")
         self.website.setLayoutDirection(Qt.RightToLeft)
         themes.bind_icon(self.website, "external-link", "successText", 11)
         self.footer_version = label("Package Manager " + self.runtime.version)
@@ -827,7 +827,7 @@ class ManagerWindow(QtWidgets.QWidget):
         self.support_button.clicked.connect(self.ask_support)
         self.check_button.clicked.connect(lambda: runtime.check_updates(True))
         self.update_all_button.clicked.connect(runtime.update_all)
-        self.website.clicked.connect(lambda: runtime.open_link(_SITE, "homepage"))
+        self.website.clicked.connect(lambda: runtime.open_catalog())  # the site's catalog, not its home page
         self.search.textChanged.connect(self._on_search)
         self.search.returnPressed.connect(self._run_discover_search)
         self.category.changed.connect(self.select_category)
@@ -1426,7 +1426,7 @@ class ManagerWindow(QtWidgets.QWidget):
 
 
 class _Site:
-    """Pseudo package so the footer link and the header's Support button reuse Runtime.open_link."""
+    """Pseudo package so the header's Support button reuses Runtime.open_link."""
 
     homepage_url = "https://maxpkg.dev"
     purchase_url = "https://store.payproglobal.com/checkout?products[1][id]=137822"  # MaxPkg donation
