@@ -12,8 +12,9 @@ import stat
 import uuid
 
 from ..domain import api
-from ..domain.packages import (DIVIDER, Package, compatible, is_divider, is_newer, merge_visible_order,
-                               normalized_order, ordered_for_toolbar, scan, toolbar_entries, with_brand_divider)
+from ..domain.packages import (DIVIDER, Package, compatible, incompatibility, is_divider, is_newer,
+                               merge_visible_order, normalized_order, ordered_for_toolbar, read_mzp_manifest, scan,
+                               supported_versions, toolbar_entries, with_brand_divider)
 from ..domain.settings import load_or_migrate
 from ..qt_compat import QtCore, Signal
 from . import log, max_api, network
@@ -206,10 +207,27 @@ class Runtime(QtCore.QObject):
         if package is None:
             self.say("The package could not be found.", "error")
             return False
+        problem = incompatibility(package, self.max_year)
+        if problem:  # its own version check would stop it anyway, with a less clear error
+            log.warning("launcher", package.guid + ": not started on 3ds Max {}: supports {}".format(
+                self.max_year, supported_versions(package)))
+            self.say(package.display_name + " could not be started.\n" + problem, "error")
+            return False
         ok, message = max_api.run_package(package)
         if not ok:
             self.say(package.display_name + " could not be started.\n" + message, "error")
         return ok
+
+    def warn_if_incompatible(self, reference):
+        """An MZP dropped into the viewport runs its own installer, so nothing could check it first: say right
+        away that it will not start in this 3ds Max."""
+        package = self.package(reference)
+        problem = incompatibility(package, self.max_year) if package is not None else ""
+        if problem:
+            guid = package.guid
+            self.say(package.display_name + " was installed, but it will not start here.\n" + problem, "warning",
+                     [("Details", "info", lambda: self.details_requested.emit(guid))])
+        return bool(problem)
 
     def set_toolbar_visible(self, reference, visible):
         package = self.package(reference)
@@ -497,6 +515,19 @@ class Runtime(QtCore.QObject):
                 failed(error)
                 return
             path, guid, temporary = result
+            bundled = read_mzp_manifest(path)
+            problem = incompatibility(bundled, max_year) if bundled is not None else ""
+            if problem:  # a file chosen by hand or a direct link: the catalog never offers it for this 3ds Max
+                if temporary:
+                    _remove_file(path)
+                self._finish()
+                log.warning("installer", "Not installed on 3ds Max {}: {} supports {}".format(
+                    max_year, bundled.guid or "package", supported_versions(bundled)))
+                name = bundled.display_name if bundled.name else fallback_name
+                self.say("{} was not {}.\n{}".format(name, "updated" if updating else "installed", problem), "error")
+                if on_done:
+                    on_done(False)
+                return
             guid = guid or (previous.guid if previous is not None else "") or _guid_from_file_name(path)
             ok = self._install_file(path, guid)
             if temporary:
@@ -538,7 +569,7 @@ class Runtime(QtCore.QObject):
             max_api.file_in(path)
             log.info("installer", "Executed " + path)
         except Exception as error:  # noqa: BLE001 - installer scripts are third-party code
-            log.error("installer", "Installation failed: " + str(error))
+            log.error("installer", "Installation failed: " + max_api.error_text(error))
             self.scan()
             return False
         self.scan()
@@ -600,7 +631,7 @@ class Runtime(QtCore.QObject):
                 if max_api.execute('(MaxPkgQuadMenuManagerData packageFolder: "' + literal + '\\\\").uninstall()') is not True:
                     return False, "Quad Menu commands could not be removed."
         except Exception as error:  # noqa: BLE001
-            log.error("uninstaller", "Hook failed for " + package.guid + ": " + str(error))
+            log.error("uninstaller", "Hook failed for " + package.guid + ": " + max_api.error_text(error))
             return False, "Its uninstall script stopped with an error. The MaxScript Listener shows the details."
         macros = max_api.get_dir("userMacros")
         icons = max_api.get_dir("userIcons")

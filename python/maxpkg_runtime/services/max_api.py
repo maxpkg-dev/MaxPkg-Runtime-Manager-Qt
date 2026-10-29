@@ -4,6 +4,7 @@ Outside Max (unit tests) every function degrades to a harmless fallback.
 """
 
 import os
+import sys
 import webbrowser
 
 try:
@@ -38,9 +39,50 @@ def get_dir(name):
         return ""
 
 
+_MISSING = object()
+
+
+class _OwnFile(object):
+    """Lets 3ds Max give each script it runs its own __file__.
+
+    python.ExecuteFile runs the file in __main__. 3ds Max 2027 then sets __file__ only when __main__ has none
+    (3ds Max 2022 always sets it).
+    Started from Python (our toolbar, the Manager), __main__ still holds the caller's __file__, so a package that
+    finds its folder through __file__ looks next to the caller. The same happens to python.ExecuteFile inside a
+    MaxScript that we fileIn. __main__.__file__ is removed for the call and restored afterwards."""
+
+    def __enter__(self):
+        self._main = sys.modules.get("__main__")
+        self._saved = getattr(self._main, "__dict__", {}).pop("__file__", _MISSING)
+        return self
+
+    def __exit__(self, *_exception):
+        if self._main is None:
+            return False
+        if self._saved is _MISSING:
+            self._main.__dict__.pop("__file__", None)
+        else:
+            self._main.__dict__["__file__"] = self._saved
+        return False
+
+
+def error_text(error):
+    """The MaxScript or Python error without pymxs' "MAXScript exception raised." first line."""
+    text = str(error).strip()
+    first, _, rest = text.partition("\n")
+    if first.strip().rstrip(".").lower() == "maxscript exception raised" and rest.strip():
+        text = rest.strip()
+    return text or error.__class__.__name__
+
+
+def _to_listener(title, error):
+    """pymxs turns a MaxScript error into a Python exception, and the Listener never sees it: print it there."""
+    print("-- MaxPkg: " + title + " stopped with an error:\n" + error_text(error))
+
+
 def run_package(package):
     """Run the package entry exactly like core/launcher.ms. Returns (ok, message): the message is for the user (no
-    paths); the details go to the log."""
+    paths); the details go to the Listener and the log."""
     entry_path = os.path.join(package.install_path, package.entry)
     if not os.path.isfile(entry_path):
         log.error("launcher", package.guid + ": entry file not found: " + entry_path)
@@ -48,22 +90,29 @@ def run_package(package):
     if rt is None:
         return False, "3ds Max is not available."
     try:
-        if package.runtime.lower() == "python" or entry_path.lower().endswith(".py"):
-            rt.python.ExecuteFile(entry_path)
-        else:
-            rt.fileIn(entry_path)
+        with _OwnFile():
+            if package.runtime.lower() == "python" or entry_path.lower().endswith(".py"):
+                rt.python.ExecuteFile(entry_path)
+            else:
+                rt.fileIn(entry_path)
     except Exception as error:  # noqa: BLE001 - a failing package must not break the Runtime
-        log.error("launcher", package.guid + ": " + str(error))
+        log.error("launcher", package.guid + ": " + error_text(error))
+        _to_listener(package.display_name, error)
         return False, "The script stopped with an error. The MaxScript Listener shows the details."
     log.info("launcher", "Ran " + package.guid)
     return True, ""
 
 
 def file_in(path):
-    """fileIn a MaxScript or MZP file. Raises on MaxScript errors."""
+    """fileIn a MaxScript or MZP file. Raises on MaxScript errors, after printing them to the Listener."""
     if rt is None:
         raise RuntimeError("3ds Max is not available")
-    rt.fileIn(path)
+    try:
+        with _OwnFile():
+            rt.fileIn(path)
+    except Exception as error:
+        _to_listener(os.path.basename(path), error)
+        raise
 
 
 def execute(source):

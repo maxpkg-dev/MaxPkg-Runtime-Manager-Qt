@@ -3,7 +3,7 @@
 import math
 
 from ..domain import markdown
-from ..domain.packages import compact_number
+from ..domain.packages import compact_number, supported_versions
 from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal
 from ..services.images import rounded
 from .cards import PackageIcon
@@ -508,7 +508,7 @@ class DetailsPage(ScrollPage):
         integration = "Toolbar" if installed is not None and self.runtime.is_on_toolbar(installed) else (
             "Package" if installed is None else "Hidden")
         packager = (package.packager_name + (" " + package.packager_version if package.packager_version else "")).strip()
-        compatibility = (package.min_max_version + " and newer") if package.min_max_version else "Any version"
+        compatibility = supported_versions(package) or "Any version"
         rows = [("Version", package.version), ("Release date", package.release_date), ("3ds Max", compatibility),
                 ("Author", package.developer), ("Type", package.runtime), ("Channel", package.release_channel),
                 ("License", package.license_type), ("Integration", integration), ("Packager", packager)]

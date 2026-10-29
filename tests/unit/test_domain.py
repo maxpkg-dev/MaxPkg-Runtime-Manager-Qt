@@ -4,12 +4,14 @@ import os
 import shutil
 import tempfile
 import unittest
+import zipfile
 
 from maxpkg_runtime.domain import api, markdown
 from maxpkg_runtime.domain.messages import without_links
 from maxpkg_runtime.domain.ini import IniDocument
-from maxpkg_runtime.domain.packages import (DIVIDER, Package, compact_number, is_newer, merge_visible_order,
-                                            normalized_order, ordered_for_toolbar, scan, toolbar_entries,
+from maxpkg_runtime.domain.packages import (DIVIDER, Package, compact_number, compatible, incompatibility, is_newer,
+                                            merge_visible_order, normalized_order, ordered_for_toolbar,
+                                            read_mzp_manifest, scan, supported_versions, toolbar_entries,
                                             with_brand_divider)
 from maxpkg_runtime.domain.settings import Settings, load_or_migrate, normalize_endpoint
 
@@ -129,15 +131,67 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(with_brand_divider([]), [DIVIDER])
 
 
+class CompatibilityTests(unittest.TestCase):
+    @staticmethod
+    def package(minimum="", maximum=""):
+        package = Package()
+        package.name = "TopoLandia"
+        package.min_max_version = minimum
+        package.max_max_version = maximum
+        return package
+
+    def test_both_bounds_like_the_api(self):
+        ranged = self.package("2024", "2027")
+        self.assertFalse(compatible(ranged, 2022))
+        self.assertTrue(compatible(ranged, 2024))
+        self.assertTrue(compatible(ranged, 2027))
+        self.assertFalse(compatible(ranged, 2028))
+        self.assertTrue(compatible(self.package(), 2022))
+        self.assertTrue(compatible(self.package("0", "0"), 2022))
+        self.assertTrue(compatible(self.package("2020"), 2030))
+        self.assertFalse(compatible(self.package("", "2025"), 2026))
+
+    def test_range_text_and_reason(self):
+        self.assertEqual(supported_versions(self.package("2024", "2027")), "2024–2027")
+        self.assertEqual(supported_versions(self.package("2025", "2025")), "2025")
+        self.assertEqual(supported_versions(self.package("2024")), "2024 and newer")
+        self.assertEqual(supported_versions(self.package("", "2025")), "2025 and older")
+        self.assertEqual(supported_versions(self.package()), "")
+        self.assertEqual(incompatibility(self.package("2024", "2027"), 2022),
+                         "It supports 3ds Max 2024–2027. This is 3ds Max 2022.")
+        self.assertEqual(incompatibility(self.package("2024", "2027"), 2025), "")
+
+    def test_manifest_inside_an_mzp(self):
+        folder = tempfile.mkdtemp()
+        try:
+            mzp = os.path.join(folder, "package.mzp")
+            with zipfile.ZipFile(mzp, "w") as archive:
+                archive.writestr("mzp.run", "run install.ms")
+                archive.writestr("docs/manifest.ini", "[package]\nname=Wrong\n")
+                archive.writestr("manifest.ini", ("﻿[package]\npackageGuid=g1\nname=TopoLandia\n"
+                                                  "min3dsMax=2024\nmax3dsMax=2027\n").encode("utf-8"))
+            package = read_mzp_manifest(mzp)
+            self.assertEqual((package.guid, package.name), ("g1", "TopoLandia"))
+            self.assertEqual(incompatibility(package, 2022), "It supports 3ds Max 2024–2027. This is 3ds Max 2022.")
+            plain = os.path.join(folder, "plain.mzp")
+            with open(plain, "w") as stream:
+                stream.write("not a zip")
+            self.assertIsNone(read_mzp_manifest(plain))
+            self.assertIsNone(read_mzp_manifest(os.path.join(folder, "missing.mzp")))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
 class ApiTests(unittest.TestCase):
     CATALOG = ("[catalog]\nPage=1\nTotalPages=2\nTotal=30\nTotalPackages=21\n"
                "[g1]\nName=Prune Scene\nVersion=3.7\nMin3dsMax=2020\nRating=5\nDownloadCount=1100\n"
-               "[g2]\nName=Future\nVersion=1\nMin3dsMax=2099\n")
+               "[g2]\nName=Future\nVersion=1\nMin3dsMax=2099\n"
+               "[g3]\nName=Old\nVersion=1\nMin3dsMax=2018\nMax3dsMax=2024\n")
 
     def test_catalog_filters_incompatible(self):
         page = api.parse_catalog(self.CATALOG, 2027)
         self.assertEqual([package.guid for package in page.packages], ["g1"])
-        self.assertEqual(page.total, 29)
+        self.assertEqual(page.total, 28)
         self.assertEqual(page.total_packages, 21)
         self.assertEqual(page.packages[0].download_count, 1100)
 

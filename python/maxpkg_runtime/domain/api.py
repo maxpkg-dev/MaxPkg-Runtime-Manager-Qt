@@ -9,7 +9,7 @@ except ImportError:  # pragma: no cover
     from urllib import urlencode
 
 from .ini import IniDocument, to_float, to_int
-from .packages import ChangelogEntry, Package, Screenshot, compatible
+from .packages import ChangelogEntry, Package, Screenshot, compatible, incompatibility
 
 SORT_MODES = ("popular", "newest", "rating", "downloads", "name")
 PAGE_SIZE = 24
@@ -261,7 +261,7 @@ def parse_details(text, max_year):
         raise ApiError("PACKAGE_NOT_FOUND", "The requested package could not be found.")
     package = packages[0]
     if not compatible(package, max_year):
-        raise ApiError("INCOMPATIBLE_3DS_MAX", "This package requires a newer version of 3ds Max.")
+        raise ApiError("INCOMPATIBLE_3DS_MAX", "This package does not run here. " + incompatibility(package, max_year))
     return package
 
 

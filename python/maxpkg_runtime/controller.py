@@ -231,9 +231,12 @@ class Controller:
             self.runtime.scan()
             return True
         if command in ("packageInstalled", "packageRemoved"):
-            if not self.runtime.operation:  # our own install/uninstall rescans when the package script returns
+            own_operation = bool(self.runtime.operation)
+            if not own_operation:  # our own install/uninstall rescans when the package script returns
                 self.runtime.scan()
             present = self.runtime.package(argument) is not None
+            if command == "packageInstalled" and present and not own_operation:  # ours checked the MZP before
+                self._later(0, lambda: self.runtime.warn_if_incompatible(argument))
             return present if command == "packageInstalled" else not present
         if command == "install":
             if self.runtime.operation:

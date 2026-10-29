@@ -2,8 +2,11 @@
 
 import os
 import re
+import zipfile
 
-from .ini import IniDocument, to_bool, to_float, to_int
+from .ini import IniDocument, decode, to_bool, to_float, to_int
+
+MZP_MANIFEST_MAX_BYTES = 1024 * 1024
 
 
 class ChangelogEntry:
@@ -156,6 +159,29 @@ def read_manifest(manifest_path):
     return package
 
 
+def read_mzp_manifest(mzp_path):
+    """Name, GUID and 3ds Max range from the manifest.ini inside an MZP (a zip), read before its installer runs.
+    None when the file is no zip or has no manifest: such a package is checked after it is installed."""
+    try:
+        with zipfile.ZipFile(mzp_path) as archive:
+            candidates = [member for member in archive.infolist()
+                          if member.filename.replace("\\", "/").rsplit("/", 1)[-1].lower() == "manifest.ini"
+                          and member.file_size <= MZP_MANIFEST_MAX_BYTES]
+            if not candidates:
+                return None
+            nearest = min(candidates, key=lambda member: member.filename.replace("\\", "/").count("/"))
+            document = IniDocument.parse(decode(archive.read(nearest)))
+    except (OSError, zipfile.BadZipFile, RuntimeError, ValueError):
+        return None
+    read = lambda *keys: document.get_any("package", keys, "")  # noqa: E731
+    package = Package()
+    package.guid = read("packageGuid", "Guid", "guid")
+    package.name = read("name", "Name")
+    package.min_max_version = read("min3dsMax", "Min3dsMax", "minimum3dsMax")
+    package.max_max_version = read("max3dsMax", "Max3dsMax", "maximum3dsMax")
+    return package
+
+
 def manifest_paths(root):
     """manifest.ini directly in `root` and in each first-level subfolder."""
     found = []
@@ -215,8 +241,30 @@ def is_newer(candidate, installed):
 
 
 def compatible(package, max_year):
+    """min3dsMax <= max_year <= max3dsMax, like the maxpkg.dev API; an empty or zero bound is open."""
     minimum = to_int(package.min_max_version, 0)
-    return minimum == 0 or max_year >= minimum
+    maximum = to_int(package.max_max_version, 0)
+    return (minimum == 0 or max_year >= minimum) and (maximum == 0 or max_year <= maximum)
+
+
+def supported_versions(package):
+    """'2024–2027', '2024 and newer', '2027 and older', or '' when the package names no versions."""
+    minimum = to_int(package.min_max_version, 0)
+    maximum = to_int(package.max_max_version, 0)
+    if minimum and maximum:
+        return str(minimum) if minimum == maximum else "{}–{}".format(minimum, maximum)
+    if minimum:
+        return "{} and newer".format(minimum)
+    if maximum:
+        return "{} and older".format(maximum)
+    return ""
+
+
+def incompatibility(package, max_year):
+    """User-facing reason why the package does not run in this 3ds Max, or '' when it does."""
+    if compatible(package, max_year):
+        return ""
+    return "It supports 3ds Max {}. This is 3ds Max {}.".format(supported_versions(package), max_year)
 
 
 def ordered_for_toolbar(packages, order, is_hidden):
@@ -310,6 +358,6 @@ def compact_number(value):
     return str(value)
 
 
-__all__ = ["Package", "ChangelogEntry", "Screenshot", "scan", "read_manifest", "is_newer", "compatible",
-           "ordered_for_toolbar", "normalized_order", "with_brand_divider", "merge_visible_order", "compact_number", "to_float", "DIVIDER",
+__all__ = ["Package", "ChangelogEntry", "Screenshot", "scan", "read_manifest", "read_mzp_manifest", "is_newer", "compatible",
+           "supported_versions", "incompatibility", "ordered_for_toolbar", "normalized_order", "with_brand_divider", "merge_visible_order", "compact_number", "to_float", "DIVIDER",
            "is_divider", "toolbar_entries"]
