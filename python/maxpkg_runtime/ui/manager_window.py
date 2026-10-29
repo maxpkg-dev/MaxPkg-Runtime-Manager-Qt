@@ -1068,7 +1068,8 @@ class ManagerWindow(QtWidgets.QWidget):
         elif current is self.details_page:
             self.details_page.refresh()
 
-    def open_details(self, guid):
+    def open_details(self, guid, tab=""):
+        """`tab`: open on that Details tab ("changelog"), otherwise on Description."""
         if self.tab != "details":
             self._before_details = self.tab
         self.tab = "details"
@@ -1077,6 +1078,8 @@ class ManagerWindow(QtWidgets.QWidget):
         self.stack.setCurrentWidget(self.details_page)
         self.details_page.set_single_column(self.width() < SINGLE_COLUMN)
         self.details_page.show_package(guid)
+        if tab:
+            self.details_page.show_tab(tab)
 
     def set_details_path(self, package):
         installed = self.runtime.package(package.guid) is not None and self._before_details != "discover"
@@ -1114,30 +1117,66 @@ class ManagerWindow(QtWidgets.QWidget):
         if accepted and self.runtime.uninstall(guid) and self.tab == "details":
             self.details_back()
 
-    def package_menu(self, guid, anchor):
+    def package_menu(self, guid, anchor, position=None, remote=None):
+        """The card's actions below `anchor` (its ... button), or at the global `position` (a right-click).
+        `remote`: the catalog package of a Discover card, for a package that is not installed."""
         package = self.runtime.package(guid)
-        if package is None:
+        if package is None and remote is None:
             return
-        developer = self.runtime.settings.developer_mode
         themes = self.themes
         menu = themed_menu(self)
+        self._menu_title(menu, package or remote)
+        if package is None:
+            self._remote_actions(menu, remote)
+        else:
+            self._installed_actions(menu, package)
+        exec_menu(menu, position if position is not None else anchor.mapToGlobal(QtCore.QPoint(0, anchor.height() + 4)))
+        menu.deleteLater()
+
+    def _menu_title(self, menu, package):
         # The same header as the toolbar's menu: the script, its byline and (when set) a link to its Donate page.
         byline = "v" + package.version + (" · " + package.developer if package.developer else "")
         purchase = package.purchase_label() if package.purchase_url else ""
-        add_menu_title(menu, package.display_name, themes, pixmap=self.images.get(package.icon_file or package.icon_url),
-                       icon_name="package", subtitle=byline,
-                       on_click=(lambda: self.open_purchase(guid)) if package.purchase_url else None,
+        add_menu_title(menu, package.display_name, self.themes,
+                       pixmap=self.images.get(package.icon_file or package.icon_url), icon_name="package",
+                       subtitle=byline, on_click=(lambda: self.open_purchase(package)) if package.purchase_url else None,
                        link_icon="heart" if purchase.lower() in ("donate", "support", "sponsor") else "shopping-cart",
                        link_tip="{}: opens the author's page in your browser".format(purchase or "Donate"))
-        add_action(menu, "Run", lambda: self.run(guid), themes, "play")
-        if self.tab == "updates" and package.update_available:
-            add_action(menu, "Update to " + package.latest_version, lambda: self.update_package(guid), themes,
-                       "download", "iconSuccess")
-        add_action(menu, "Details", lambda: self.open_details(guid), themes, "info")
+
+    def _site_actions(self, menu, package):
+        """Package page and Copy link (packages from the catalog), Help (when the package has documentation)."""
+        themes = self.themes
         if package.documentation_url:
             add_action(menu, "Help", lambda: self.runtime.open_link(package, "documentation"), themes, "book-open")
+        if package.slug:
+            add_action(menu, "Package page", lambda: self.runtime.open_link(package, "maxpkg"), themes,
+                       "external-link")
+            add_action(menu, "Copy link", lambda: self.copy_text(self.runtime.link_url(package, "maxpkg"),
+                                                                 "Link copied."), themes, "copy")
+
+    def _remote_actions(self, menu, package):
+        """Discover card of a package that is not installed."""
+        guid = package.guid
+        themes = self.themes
+        add_action(menu, "Install", lambda: self.install(guid), themes, "download", "iconSuccess")
+        add_action(menu, "Details", lambda: self.open_details(guid), themes, "info")
+        menu.addSeparator()
+        self._site_actions(menu, package)
+
+    def _installed_actions(self, menu, package):
+        guid = package.guid
+        developer = self.runtime.settings.developer_mode
+        themes = self.themes
+        if package.update_available:  # first: it is why the card is in Updates
+            add_action(menu, "Update to " + package.latest_version, lambda: self.update_package(guid), themes,
+                       "download", "iconSuccess")
+            add_action(menu, "What's new", lambda: self.open_details(guid, "changelog"), themes, "sparkles")
+            menu.addSeparator()
+        add_action(menu, "Run", lambda: self.run(guid), themes, "play")
+        add_action(menu, "Details", lambda: self.open_details(guid), themes, "info")
         if developer:
             add_action(menu, "Open Folder", lambda: self.runtime.open_folder(guid), themes, "folder-open")
+        self._site_actions(menu, package)
         menu.addSeparator()
         on_toolbar = self.runtime.is_on_toolbar(package)
         add_action(menu, "Hide from Toolbar" if on_toolbar else "Show in Toolbar",
@@ -1148,12 +1187,9 @@ class ManagerWindow(QtWidgets.QWidget):
             add_action(menu, "Copy Path", lambda: self.copy_text(package.install_path, "Path copied."), themes, "copy")
         menu.addSeparator()
         add_danger_action(menu, "Uninstall", lambda: self.uninstall(guid), themes)
-        exec_menu(menu, anchor.mapToGlobal(QtCore.QPoint(0, anchor.height() + 4)))
-        menu.deleteLater()
 
-    def open_purchase(self, guid):
-        package = self.runtime.package(guid)
-        if package is not None and self.runtime.open_link(package, "purchase"):
+    def open_purchase(self, package):
+        if self.runtime.open_link(package, "purchase"):
             self.notify("Opened the {} page of {} in your browser.\nThank you for supporting the author.".format(
                 package.purchase_label(), package.display_name), "success")
 

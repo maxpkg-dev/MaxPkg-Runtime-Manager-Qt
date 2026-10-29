@@ -86,6 +86,12 @@ class _CardBase(QtWidgets.QFrame):
         self._pressed = False
         QtWidgets.QFrame.mouseReleaseEvent(self, event)
 
+    def contextMenuEvent(self, event):
+        """Right-click: the package's menu at the pointer (the ... menu for installed packages, Install and links
+        for Discover cards of packages that are not installed)."""
+        event.accept()
+        self.host.package_menu(self.package.guid, self, event.globalPos(), remote=self.package)
+
 
 class InstalledCard(_CardBase):
     """Installed/Updates card. Compact by default; full cards add description and badges."""

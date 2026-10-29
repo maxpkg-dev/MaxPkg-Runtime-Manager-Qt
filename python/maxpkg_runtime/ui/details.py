@@ -387,6 +387,10 @@ class DetailsPage(ScrollPage):
         self.tab = key
         self.refresh()
 
+    def show_tab(self, key):
+        """Open the shown package on a tab ("changelog"); kept when its online details arrive."""
+        self._select_tab(key)
+
     def _tab_panel(self, package):
         if self.tab == "screenshots":
             frame, layout = section("Screenshots")

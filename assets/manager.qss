@@ -25,6 +25,9 @@ QPushButton#ChromeButton { min-width: 28px; max-width: 28px; min-height: 28px; m
     border: 1px solid transparent; border-radius: 14px; background: transparent; padding: 0;
 }
 QPushButton#ChromeButton:hover { background: @surfaceHover; border-color: @borderDefault; }
+/* Close turns red on hover with PivotLandia's colours (the same in every theme), behind a light glass edge. */
+QPushButton#ChromeButton[close="true"]:hover { background: #9f3636; border-color: rgba(230, 120, 120, 150); }
+QPushButton#ChromeButton[close="true"]:pressed { background: #842d2d; border-color: rgba(230, 120, 120, 110); }
 /* The collapsed bar's name fills the row like the close button next to it (28 px, fully rounded). */
 QPushButton#MiniTitle {
     background: transparent; border: none; border-radius: 13px; color: @accent; font-weight: bold;

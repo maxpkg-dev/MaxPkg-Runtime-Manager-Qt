@@ -76,12 +76,17 @@ def _parse(path, fallback):
     return Theme(parser["Theme"].get("Id", path.stem), parser["Theme"].get("Name", path.stem), colors)
 
 
+LISTED_FIRST = ("warm-graphite",)  # shown right after Default; the others follow by file name
+
+
 def load_folder(folder):
     """Default first; extra or user INI files fall back to Default for missing tokens; broken ones are skipped."""
     themes = {}
     base = _parse(folder / (DEFAULT_THEME + ".ini"), {})
     themes[base.id] = base
-    for path in sorted(folder.glob("*.ini")):
+    paths = sorted(folder.glob("*.ini"), key=lambda path: (
+        LISTED_FIRST.index(path.stem) if path.stem in LISTED_FIRST else len(LISTED_FIRST), path.stem))
+    for path in paths:
         if path.stem == DEFAULT_THEME:
             continue
         try:

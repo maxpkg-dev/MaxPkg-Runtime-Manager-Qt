@@ -200,6 +200,7 @@ class WindowChrome(QtCore.QObject):
         # Qt calls eventFilter while the filters are being installed: every watched name exists first.
         self.title_bar = self.mini_grip = self.mini_title = None
         self.mini_bar = None
+        self._close_buttons = []  # their X turns white over the red hover
         # The edge resize cursor is set on the window, so its children inherit it; the window gets no event when the
         # pointer moves from an edge onto a child (the title bar), so each direct child clears it on Enter.
         window.installEventFilter(self)
@@ -223,10 +224,24 @@ class WindowChrome(QtCore.QObject):
         for icon_name, tip, slot in specs:
             button = IconButton(icon_name, tip, self.themes)
             button.setObjectName("ChromeButton")
+            button.setProperty("close", "true" if icon_name == "x" else "false")  # red on hover
             button.setFixedSize(28, 28)
+            if icon_name == "x":
+                self._watch_close(button)
             button.clicked.connect(slot)
             buttons.append(button)
         return buttons
+
+    def _watch_close(self, button):
+        self._close_buttons.append(button)
+        button.installEventFilter(self)
+
+    def _tint_close(self, button, hovered):
+        if hovered:
+            dpr = button.devicePixelRatioF()
+            button.setIcon(icons.icon("x", QtGui.QColor("#ffffff"), 16, dpr))
+        else:
+            self.themes.reapply(button)  # back to the theme's icon colour
 
     def _build_mini_bar(self, title):
         themes = self.themes
@@ -253,6 +268,8 @@ class WindowChrome(QtCore.QObject):
         mini.addWidget(self.mini_title, 1)
         mini_close = IconButton("x", "Close MaxPkg Manager", themes)
         mini_close.setObjectName("ChromeButton")
+        mini_close.setProperty("close", "true")
+        self._watch_close(mini_close)
         mini_close.setFixedSize(28, 28)  # same size as the ChromeButton rule and the title next to it
         mini_close.clicked.connect(window.close)
         mini.addWidget(mini_close)
@@ -272,6 +289,9 @@ class WindowChrome(QtCore.QObject):
             return False
         if kind == QtCore.QEvent.Enter and self._resizing is None and watched.parent() is window:
             window.unsetCursor()
+        if kind in (QtCore.QEvent.Enter, QtCore.QEvent.Leave) and watched in self._close_buttons:
+            self._tint_close(watched, kind == QtCore.QEvent.Enter)
+            return False
         if watched in (self.mini_grip, self.mini_title):
             if kind == QtCore.QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                 self._drag = event_global_pos(event) - window.frameGeometry().topLeft()
