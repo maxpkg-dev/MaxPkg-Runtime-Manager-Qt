@@ -54,8 +54,8 @@ class _CardBase(QtWidgets.QFrame):
         self.setCursor(Qt.PointingHandCursor)
 
     def _shine(self, button):
-        """The card's main action shimmers while the pointer is over the card."""
-        button.shimmer = Shimmer(button, radius=10, hover_area=self)
+        """The card's main action shimmers once the pointer has rested on the card for a moment."""
+        button.shimmer = Shimmer(button, radius=10, hover_area=self, hover_delay=CARD_SHINE_DELAY_MS)
 
     def _heading(self, show_hidden=False):
         """Icon + title + 'v1.2 · developer' as one clickable area that opens Details."""
@@ -185,6 +185,7 @@ class DragHandle(QtWidgets.QLabel):
 
 
 CARD_DRAG_DISTANCE = 6  # px a press on the card moves before it becomes a drag instead of a click
+CARD_SHINE_DELAY_MS = 1500  # the pointer rests this long on a card before its main button shimmers
 
 
 def start_card_drag(card, grab_point):

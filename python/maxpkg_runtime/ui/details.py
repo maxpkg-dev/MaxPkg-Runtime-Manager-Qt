@@ -5,7 +5,7 @@ from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal
 from ..services.images import rounded
 from .cards import PackageIcon
 from .pages import ScrollPage
-from .widgets import (Badge, Button, DragScroll, FlowRow, IconButton, IconLabel, Shimmer, SlideView, hbox, label,
+from .widgets import (Badge, Button, CopyButton, DragScroll, FlowRow, IconLabel, Shimmer, SlideView, hbox, label,
                       vbox)
 
 SINGLE_COLUMN = 900
@@ -286,25 +286,29 @@ class DetailsPage(ScrollPage):
         installed = self.runtime.package(package.guid)
         for text, kind in self._badges(package, installed):
             badges.add(Badge(text, kind))
-        top = hbox(icon, vbox(name, by, badges, spacing=4), spacing=12)
-        top.setStretch(1, 1)
-        actions = FlowRow(spacing=12)
+        # Actions sit at the top right, next to the name (as in the maxpkg.dev mock-up).
+        actions = hbox(spacing=8)
         if installed is None:
             install = Button("Install", "download", "primary", themes)
             install.clicked.connect(lambda: self.manager_window.install(package.guid))
-            actions.add(install)
+            actions.addWidget(install)
         else:
             run = Button("Run", "play", "primary", themes)
             run.clicked.connect(lambda: self.manager_window.run(package.guid))
-            actions.add(run)
+            actions.addWidget(run)
             if installed.update_available:
                 update = Button("Update to " + installed.latest_version, "download", "success", themes)
                 update.clicked.connect(lambda: self.manager_window.update_package(package.guid))
-                actions.add(update)
+                actions.addWidget(update)
             remove = Button("Uninstall", "trash-2", "danger", themes)
             remove.clicked.connect(lambda: self.manager_window.uninstall(package.guid))
-            actions.add(remove)
-        frame.setLayout(vbox(top, actions, spacing=12, margins=(12, 12, 12, 12)))
+            actions.addWidget(remove)
+        top = hbox(icon, vbox(name, by, badges, spacing=4), spacing=12)
+        top.addLayout(actions)
+        top.setStretch(1, 1)
+        top.setAlignment(actions, Qt.AlignTop)
+        top.setAlignment(icon, Qt.AlignTop)
+        frame.setLayout(vbox(top, margins=(12, 12, 12, 12)))
         return frame
 
     def _badges(self, package, installed):
@@ -423,10 +427,6 @@ class DetailsPage(ScrollPage):
     def _links(self, package):
         themes = self.manager_window.themes
         row = FlowRow(spacing=12, row_spacing=10)
-        if package.slug:
-            copy = IconButton("copy", "Copy MaxPkg link", themes)
-            copy.clicked.connect(lambda: self.manager_window.copy_text(self.runtime.link_url(package, "maxpkg"), "Link copied."))
-            row.add(copy)
         for kind, text in (("maxpkg", "MaxPkg page"), ("homepage", "Homepage"), ("documentation", "Documentation"),
                            ("support", "Support"), ("license", "License")):
             if kind == "maxpkg" and not package.slug:
@@ -441,6 +441,15 @@ class DetailsPage(ScrollPage):
             folder.clicked.connect(lambda: self.runtime.open_folder(package.guid))
             row.add(folder)
         frame, layout = section("Links")
+        if package.slug:  # the small copy icon sits at the end of the section title, outside the button rows
+            title = layout.takeAt(0).widget()
+            header = InfoRow(name="SectionHeader")
+            header.setMinimumHeight(CopyButton.SIZE)  # room for the hover frame (children are clipped)
+            header.setLayout(hbox(title, None, CopyButton.SIZE))
+            copy = CopyButton("Copy MaxPkg link", themes)
+            copy.clicked.connect(lambda: self.manager_window.copy_text(self.runtime.link_url(package, "maxpkg"), "Link copied."))
+            header.overlay(copy)
+            layout.insertWidget(0, header)
         layout.addWidget(row)
         return frame
 
@@ -484,7 +493,18 @@ class DetailsPage(ScrollPage):
         frame = QtWidgets.QFrame()
         frame.setObjectName("DetailsSection")
         layout = vbox(spacing=0, margins=(12, 12, 12, 8))
-        layout.addWidget(label("PACKAGE INFORMATION", "SectionTitle"))
+        title = label("PACKAGE INFORMATION", "SectionTitle")
+        if package.slug:  # the package's page on maxpkg.dev, at the end of the section title
+            website = QtWidgets.QPushButton("Package page")
+            website.setObjectName("SectionLink")
+            website.setCursor(Qt.PointingHandCursor)
+            website.setToolTip("Open " + self.runtime.link_url(package, "maxpkg"))
+            website.setLayoutDirection(Qt.RightToLeft)  # the icon after the text, like the status bar link
+            self.manager_window.themes.bind_icon(website, "external-link", "successText", 11)
+            website.clicked.connect(lambda: self.runtime.open_link(package, "maxpkg"))
+            layout.addLayout(hbox(title, None, website, spacing=6))
+        else:
+            layout.addWidget(title)
         layout.addSpacing(8)
         installed = self.runtime.package(package.guid)
         integration = "Toolbar" if installed is not None and self.runtime.is_on_toolbar(installed) else (
@@ -494,6 +514,9 @@ class DetailsPage(ScrollPage):
         rows = [("Version", package.version), ("Release date", package.release_date), ("3ds Max", compatibility),
                 ("Author", package.developer), ("Type", package.runtime), ("Channel", package.release_channel),
                 ("License", package.license_type), ("Integration", integration), ("Packager", packager)]
+        if package.is_remote or package.details_loaded:  # catalog stats; a package only known locally has none
+            layout.addWidget(self._rating_row(package))
+            layout.addWidget(self._info_row("Downloads", "{:,}".format(package.download_count), icon="download"))
         identifier = package.slug or package.guid
         if identifier:
             layout.addWidget(self._info_row("Package ID", identifier, copy=True))
@@ -503,21 +526,58 @@ class DetailsPage(ScrollPage):
         frame.setLayout(layout)
         return frame
 
-    def _info_row(self, key, value, copy=False):
-        row = QtWidgets.QFrame()
-        row.setObjectName("InfoRow")
+    def _rating_row(self, package):
+        """'★★★★☆ 4.2 (12)' as on maxpkg.dev: stars and score in the warning colour, the review count muted."""
+        theme = self.manager_window.themes.manager
+        filled = max(0, min(5, int(package.rating + 0.5)))
+        score = "{} {:.1f}".format("★" * filled + "☆" * (5 - filled), package.rating)
+        reviews = "({})".format(package.review_count)
+        row = self._info_row("Rating", score + " " + reviews)
+        value_label = row.findChild(QtWidgets.QLabel, "InfoValue")
+        value_label.setTextFormat(Qt.RichText)
+        value_label.setText('<span style="color:{};">{}</span> <span style="color:{};">{}</span>'.format(
+            theme.color("warning").name(), score, theme.color("textMuted").name(), reviews))
+        value_label.setToolTip("Rating {:.1f} from {} review(s)".format(package.rating, package.review_count))
+        return row
+
+    def _info_row(self, key, value, copy=False, icon=""):
+        row = InfoRow()
         value_label = label(value, "InfoValue")
         value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         value_label.setToolTip(value)
-        layout = hbox(label(key, "InfoKey"), None, value_label, spacing=6, margins=(0, 8, 0, 8))
+        layout = hbox(label(key, "InfoKey"), None, spacing=6, margins=(0, 8, 0, 8))
+        if icon:
+            layout.addWidget(IconLabel(icon, self.manager_window.themes, "iconMuted", 13))
+        layout.addWidget(value_label)
         if copy:
-            button = IconButton("copy", "Copy Package ID", self.manager_window.themes)
-            button.setFixedSize(26, 26)
+            button = CopyButton("Copy Package ID", self.manager_window.themes)
             button.clicked.connect(lambda: self.manager_window.copy_text(value, "Package ID copied."))
-            layout.addWidget(button)
+            layout.addSpacing(CopyButton.SIZE + 2)
+            row.overlay(button)
         row.setLayout(layout)
         return row
+
+
+class InfoRow(QtWidgets.QFrame):
+    """One 'key  value' line of Package information. A trailing button floats over the row's right end, so it
+    keeps the same height as the plain text rows."""
+
+    def __init__(self, parent=None, name="InfoRow"):
+        QtWidgets.QFrame.__init__(self, parent)
+        self.setObjectName(name)
+        self._button = None
+
+    def overlay(self, button):
+        button.setParent(self)
+        self._button = button
+
+    def resizeEvent(self, event):
+        QtWidgets.QFrame.resizeEvent(self, event)
+        if self._button is not None:
+            button = self._button
+            button.move(self.width() - button.width(), (self.height() - button.height()) // 2)
+            button.raise_()
 
 
 __all__ = ["DetailsPage", "SINGLE_COLUMN", "IconLabel"]

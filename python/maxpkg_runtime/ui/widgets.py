@@ -122,6 +122,21 @@ class IconButton(Button):
         Button.__init__(self, "", icon_name, "default", themes, parent=parent, tooltip=tooltip)
 
 
+class CopyButton(QtWidgets.QPushButton):
+    """Small borderless copy icon that fits inside a text row without making it taller."""
+
+    SIZE = 20
+
+    def __init__(self, tooltip, themes, parent=None):
+        QtWidgets.QPushButton.__init__(self, parent)
+        self.setObjectName("CopyButton")
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.TabFocus)
+        self.setToolTip(tooltip)
+        themes.bind_icon(self, "copy", "iconMuted", 13)
+
+
 class Badge(QtWidgets.QLabel):
     def __init__(self, text, kind="default", parent=None):
         QtWidgets.QLabel.__init__(self, text, parent)
@@ -844,28 +859,34 @@ class Shimmer(QtWidgets.QWidget):
     Show Layers button). Painted over the button, clipped to its rounded corners; mouse events pass through.
 
     With `hover_area` (a card) the band only sweeps while the pointer is over that area: the first sweep starts
-    on entering, and a sweep in progress finishes after leaving instead of vanishing mid-way."""
+    `hover_delay` ms after entering (leaving earlier plays nothing), and a sweep in progress finishes after
+    leaving instead of vanishing mid-way."""
 
     SWEEP_MS = 900
     PAUSE_MS = 2600
     SLANT = 0.45  # the band leans this much (horizontal per vertical)
 
-    def __init__(self, target, radius=10, hover_area=None):
+    def __init__(self, target, radius=10, hover_area=None, hover_delay=0):
         QtWidgets.QWidget.__init__(self, target)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.radius = radius
         self._hover_area = hover_area
-        self._hovered = hover_area is None
+        self._hovered = hover_area is None  # True while sweeps run: over the area and past the delay
         self._finishing_cycle = -1  # sweep cycle that still plays to its end after the pointer left
         self._clock = QtCore.QElapsedTimer()
         self._clock.start()
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._tick)
+        self._delay = QtCore.QTimer(self)
+        self._delay.setSingleShot(True)
+        self._delay.setInterval(hover_delay)
+        self._delay.timeout.connect(self._start_hover)
         target.installEventFilter(self)
         if hover_area is not None:
             hover_area.installEventFilter(self)
-            self._hovered = hover_area.underMouse()
+            if hover_area.underMouse():
+                self._delay.start()
         self._follow()
 
     def _tick(self):
@@ -893,19 +914,26 @@ class Shimmer(QtWidgets.QWidget):
         kind = event.type()
         if watched is self._hover_area:
             if kind == QtCore.QEvent.Enter and not self._hovered:
-                self._hovered = True
-                if self.phase() is None:
-                    self._clock.restart()  # start a sweep now, unless the previous one is still running
-                self._timer.setInterval(33)
-                self._timer.start()
-            elif kind == QtCore.QEvent.Leave and self._hovered:
-                in_sweep = self.phase() is not None
-                self._hovered = False
-                cycle = self._clock.elapsed() // (self.SWEEP_MS + self.PAUSE_MS)
-                self._finishing_cycle = cycle if in_sweep else -1
+                self._delay.start()
+            elif kind == QtCore.QEvent.Leave:
+                self._delay.stop()  # left before the delay ended: no sweep at all
+                if self._hovered:
+                    in_sweep = self.phase() is not None
+                    self._hovered = False
+                    cycle = self._clock.elapsed() // (self.SWEEP_MS + self.PAUSE_MS)
+                    self._finishing_cycle = cycle if in_sweep else -1
         elif kind in (QtCore.QEvent.Show, QtCore.QEvent.Hide, QtCore.QEvent.Resize):
             self._follow()
         return False
+
+    def _start_hover(self):
+        if self._hovered or self._hover_area is None or not self._hover_area.underMouse():
+            return
+        self._hovered = True
+        if self.phase() is None:
+            self._clock.restart()  # start a sweep now, unless the previous one is still running
+        self._timer.setInterval(33)
+        self._timer.start()
 
     def phase(self):
         """0..1 while the band sweeps, None in the pause (and after the last sweep once the pointer left)."""

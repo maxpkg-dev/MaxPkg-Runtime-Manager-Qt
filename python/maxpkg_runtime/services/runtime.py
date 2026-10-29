@@ -257,7 +257,7 @@ class Runtime(QtCore.QObject):
 
     def link_url(self, package, kind):
         if kind == "maxpkg":
-            return self.site_url("/packages/" + (package.slug or package.guid))
+            return self.site_url("/catalog/" + (package.slug or package.guid))
         return {"homepage": package.homepage_url, "documentation": package.documentation_url,
                 "support": package.support_url, "purchase": package.purchase_url,
                 "license": package.license_url}.get(kind, "")

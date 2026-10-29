@@ -200,6 +200,12 @@ class WindowChrome(QtCore.QObject):
         # Qt calls eventFilter while the filters are being installed: every watched name exists first.
         self.title_bar = self.mini_grip = self.mini_title = None
         self.mini_bar = None
+        # The edge resize cursor is set on the window, so its children inherit it; the window gets no event when the
+        # pointer moves from an edge onto a child (the title bar), so each direct child clears it on Enter.
+        window.installEventFilter(self)
+        for child in window.children():
+            if child.isWidgetType():
+                child.installEventFilter(self)
         if collapsible:
             self._build_mini_bar(title)
 
@@ -260,6 +266,12 @@ class WindowChrome(QtCore.QObject):
     def eventFilter(self, watched, event):
         kind = event.type()
         window = self.window
+        if watched is window:
+            if kind == QtCore.QEvent.ChildAdded and event.child().isWidgetType():
+                event.child().installEventFilter(self)
+            return False
+        if kind == QtCore.QEvent.Enter and self._resizing is None and watched.parent() is window:
+            window.unsetCursor()
         if watched in (self.mini_grip, self.mini_title):
             if kind == QtCore.QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                 self._drag = event_global_pos(event) - window.frameGeometry().topLeft()

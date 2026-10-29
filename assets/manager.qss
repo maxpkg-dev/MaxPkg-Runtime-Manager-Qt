@@ -108,6 +108,9 @@ QPushButton[variant="installed"] { border-color: @successBorder; background: @su
 QPushButton[compact="true"] { padding: 5px 9px; }
 QPushButton[iconOnly="true"] { padding: 6px; min-width: 18px; max-width: 18px; }
 QPushButton[iconOnly="true"][variant] { min-width: 18px; }
+/* Small copy icon inside text rows (Package ID, the MaxPkg link): no frame until hovered. */
+QPushButton#CopyButton { border: 1px solid transparent; border-radius: 5px; background: transparent; padding: 0; }
+QPushButton#CopyButton:hover { background: @surfaceHover; border-color: @borderDefault; }
 
 #TextLink { border: none; background: transparent; color: @textMuted; padding: 2px 0; }
 #TextLink:hover { color: @accentHover; }
@@ -182,6 +185,8 @@ QPushButton#CollectionPill {
 }
 #SidebarPanel { border: 1px solid @borderStrong; border-radius: 16px; background: @surfaceGlass; }
 #SectionTitle { color: @textMuted; font-size: 11px; font-weight: bold; letter-spacing: 0.7px; }
+#SectionLink { color: @successText; font-size: 11px; border: none; background: transparent; padding: 0 2px; }
+#SectionLink:hover { color: @accentHover; }
 #SidebarTitle { color: @accentText; font-size: 11px; font-weight: bold; letter-spacing: 0.7px; }
 #StatePanel { border: 1px solid @borderDefault; border-radius: 16px; background: @surfaceGlass; }
 #StateTitle { color: @textStrong; font-size: 18px; font-weight: bold; }
