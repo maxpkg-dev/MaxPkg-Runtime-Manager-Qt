@@ -155,6 +155,14 @@
         return true
     )
 
+    -- The 3ds Max year. maxVersion() has it as item 8 only since 3ds Max 2019; older releases give the release
+    -- number (18000 is 3ds Max 2016), which counts up by 1000 a year.
+    fn currentMaxYear = (
+        local versionInfo = maxVersion()
+        if (versionInfo.count >= 8 and (classOf versionInfo[8]) == Integer and versionInfo[8] > 2000) do return versionInfo[8]
+        return 1998 + (versionInfo[1] / 1000)
+    )
+
     fn isFolderEmpty folderPath = (
         return (getFiles (folderPath + "*")).count == 0 and (getDirectories (folderPath + "*")).count == 0
     )
@@ -221,37 +229,48 @@
         runtimeVersion = "Unknown"
     )
 
-    try (
-        local maxYear = (maxVersion())[8]
-        if (maxYear == undefined or maxYear < minimumMaxYear) do (
-            throw ("MaxPkg Package Manager requires 3ds Max " + (minimumMaxYear as string) + " or newer.")
-        )
-        if ((toLower sourceRoot) == (toLower targetRoot)) do throw "The Package Manager cannot be installed over its source folder."
-        if (temporaryRoot == "") do throw "The 3ds Max temporary folder is unavailable."
-        removeLegacyRuntime temporaryRoot targetRoot sourceRoot
-        local stopEntry = targetRoot + @"python\stop.py"
-        if (doesFileExist stopEntry) do (
-            try (
-                runPython stopEntry
-            ) catch (
-                format "MaxPkg could not stop the running Package Manager: %\n" (getCurrentException())
+    fn installPackageManager sourceRoot temporaryRoot targetRoot runtimeVersion = (
+        try (
+            if ((toLower sourceRoot) == (toLower targetRoot)) do throw "The Package Manager cannot be installed over its source folder."
+            if (temporaryRoot == "") do throw "The 3ds Max temporary folder is unavailable."
+            removeLegacyRuntime temporaryRoot targetRoot sourceRoot
+            local stopEntry = targetRoot + @"python\stop.py"
+            if (doesFileExist stopEntry) do (
+                try (
+                    runPython stopEntry
+                ) catch (
+                    format "MaxPkg could not stop the running Package Manager: %\n" (getCurrentException())
+                )
             )
+            makeDir targetRoot all: true
+            -- Code and assets are replaced completely; settings.ini, logs, cache and downloads are kept.
+            if (not (forceDeleteFolder (targetRoot + @"python\"))) do throw ("Could not remove the previous Package Manager code:\n" + targetRoot + @"python\")
+            if (not (forceDeleteFolder (targetRoot + @"assets\"))) do throw ("Could not remove the previous Package Manager assets:\n" + targetRoot + @"assets\")
+            copyTree (sourceRoot + @"python\") (targetRoot + @"python\")
+            copyTree (sourceRoot + @"assets\") (targetRoot + @"assets\")
+            replaceFile (sourceRoot + "StartMaxPkg.ms") (targetRoot + "StartMaxPkg.ms")
+            replaceFile (sourceRoot + "version.ini") (targetRoot + "version.ini")
+            replaceFile (sourceRoot + "uninstall.ms") (targetRoot + "uninstall.ms")
+            local shimPath = (ensureSlash (getDir #userStartupScripts)) + "maxpkg-runtime-qt-startup.ms"
+            if (not (writeStartupShim shimPath targetRoot)) do throw "Could not create the startup script."
+            if (not (writeManagerMacro targetRoot)) do throw "Could not create the MaxPkg Manager (Qt) MacroScript."
+            runPython (targetRoot + @"python\welcome.py")
+            format "MaxPkg Package Manager % was installed to %\n" runtimeVersion targetRoot
+            return true
+        ) catch (
+            messageBox ("MaxPkg Package Manager " + runtimeVersion + " could not be installed.\n\n" + (getCurrentException()) + "\n\nYour 3ds Max scenes were not changed. Close MaxPkg windows, restart 3ds Max and run the installer again.") title: "MaxPkg Runtime Setup"
+            return false
         )
-        makeDir targetRoot all: true
-        -- Code and assets are replaced completely; settings.ini, logs, cache and downloads are kept.
-        if (not (forceDeleteFolder (targetRoot + @"python\"))) do throw ("Could not remove the previous Package Manager code:\n" + targetRoot + @"python\")
-        if (not (forceDeleteFolder (targetRoot + @"assets\"))) do throw ("Could not remove the previous Package Manager assets:\n" + targetRoot + @"assets\")
-        copyTree (sourceRoot + @"python\") (targetRoot + @"python\")
-        copyTree (sourceRoot + @"assets\") (targetRoot + @"assets\")
-        replaceFile (sourceRoot + "StartMaxPkg.ms") (targetRoot + "StartMaxPkg.ms")
-        replaceFile (sourceRoot + "version.ini") (targetRoot + "version.ini")
-        replaceFile (sourceRoot + "uninstall.ms") (targetRoot + "uninstall.ms")
-        local shimPath = (ensureSlash (getDir #userStartupScripts)) + "maxpkg-runtime-qt-startup.ms"
-        if (not (writeStartupShim shimPath targetRoot)) do throw "Could not create the startup script."
-        if (not (writeManagerMacro targetRoot)) do throw "Could not create the MaxPkg Manager (Qt) MacroScript."
-        runPython (targetRoot + @"python\welcome.py")
-        format "MaxPkg Package Manager % was installed to %\n" runtimeVersion targetRoot
-    ) catch (
-        messageBox ("MaxPkg Package Manager " + runtimeVersion + " could not be installed.\n\n" + (getCurrentException()) + "\n\nYour 3ds Max scenes were not changed. Close MaxPkg windows, restart 3ds Max and run the installer again.") title: "MaxPkg Runtime Setup"
+    )
+
+    -- Checked before anything else: on an older 3ds Max nothing is removed, copied or written.
+    local maxYear = currentMaxYear()
+    if (maxYear < minimumMaxYear) then (
+        messageBox ("MaxPkg Package Manager " + runtimeVersion + " needs 3ds Max " + (minimumMaxYear as string) + \
+                    " or newer.\n\nThis is 3ds Max " + (maxYear as string) + ". Nothing was installed or changed: " + \
+                    "your scripts, toolbars and an earlier MaxPkg Runtime keep working as before.") \
+            title: "MaxPkg Package Manager"
+    ) else (
+        installPackageManager sourceRoot temporaryRoot targetRoot runtimeVersion
     )
 )

@@ -97,8 +97,9 @@ def load_folder(folder):
     return themes
 
 
-def native_toolbar_theme(base):
-    """Toolbar colors taken from 3ds Max's own palette, so the toolbar matches light and dark Max UI."""
+def native_toolbar_theme(base, theme_id=DEFAULT_THEME, name="Default"):
+    """Toolbar colors taken from 3ds Max's own palette, so the toolbar matches the user's light, dark or custom
+    Max UI. The Default toolbar theme is this; `base` (default.ini) keeps the update badge colors."""
     palette = QtWidgets.QApplication.palette()
     window = palette.color(QtGui.QPalette.Window)
     button = palette.color(QtGui.QPalette.Button)
@@ -114,7 +115,7 @@ def native_toolbar_theme(base):
         "buttonHoverBorder": highlight, "buttonHoverText": text, "fallbackBackground": highlight,
         "brandIcon": text,
     })
-    return Theme(NATIVE_TOOLBAR_THEME, "3ds Max (native)", colors)
+    return Theme(theme_id, name, colors)
 
 
 class ThemeService(QtCore.QObject):
@@ -126,7 +127,8 @@ class ThemeService(QtCore.QObject):
         icons.set_root(root / "assets" / "icons")
         self._manager_themes = load_folder(root / "assets" / "themes" / "manager")
         self._toolbar_themes = load_folder(root / "assets" / "themes" / "toolbar")
-        self._toolbar_themes[NATIVE_TOOLBAR_THEME] = native_toolbar_theme(self._toolbar_themes[DEFAULT_THEME])
+        self._toolbar_base = self._toolbar_themes[DEFAULT_THEME]  # default.ini, the other themes' fallback
+        self._toolbar_themes[DEFAULT_THEME] = native_toolbar_theme(self._toolbar_base)
         self.manager = self._manager_themes[DEFAULT_THEME]
         self.toolbar = self._toolbar_themes[DEFAULT_THEME]
         self._qss_source = (root / "assets" / "manager.qss").read_text(encoding="utf-8")
@@ -145,8 +147,11 @@ class ThemeService(QtCore.QObject):
         return self.manager.id
 
     def set_toolbar(self, theme_id):
-        if theme_id == NATIVE_TOOLBAR_THEME:
-            self._toolbar_themes[NATIVE_TOOLBAR_THEME] = native_toolbar_theme(self._toolbar_themes[DEFAULT_THEME])
+        if theme_id in (DEFAULT_THEME, NATIVE_TOOLBAR_THEME):
+            # Default follows 3ds Max; read the palette again in case the user changed Max's colors. The former
+            # "3ds Max (native)" choice is the same thing now.
+            theme_id = DEFAULT_THEME
+            self._toolbar_themes[DEFAULT_THEME] = native_toolbar_theme(self._toolbar_base)
         self.toolbar = self._toolbar_themes.get(theme_id) or self._toolbar_themes[DEFAULT_THEME]
         self.toolbar_changed.emit()
         return self.toolbar.id

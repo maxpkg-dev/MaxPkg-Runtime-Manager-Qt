@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.2
+
+- Fixed: On 3ds Max older than 2022 the installer says which version is needed and changes nothing; earlier tools and the previous MaxPkg Runtime keep working.
+- Changed: The Default toolbar theme takes its colors from 3ds Max, so the toolbar matches light, dark and custom Max colors; it replaces the separate 3ds Max (native) theme.
+- Changed: The maxpkg.dev link at the bottom of the Manager opens the catalog.
+
 ## 2.0.1
 
 - Fixed: The Screenshots and Changelog counts in package details sit right after their tab titles, under the same underline.
