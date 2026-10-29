@@ -221,15 +221,17 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         return QtCore.QRect(7, (self.height() - size) // 2, size, size)
 
     def _paint_update_mark(self, painter, icon_rect):
-        """A package with an update, never over its icon: a dot at the right end of a text button, a short bar
-        in the free strip under the icon of an icon-only button."""
-        painter.setPen(Qt.NoPen)
+        """A package with an update: a small red dot in the bottom-right corner of an icon-only button (ringed in
+        the toolbar colour, so it stays apart from the icon's corner), a dot after the text on a text button."""
         painter.setBrush(self.theme.color("updateBadgeBackground"))
         if self.style_info.icon_only:
-            bar = max(6.0, icon_rect.width() * 0.5)
-            thickness = max(1.5, min(2.0, float(self.height() - icon_rect.bottom() - 1)))
-            painter.drawRoundedRect(QtCore.QRectF((self.width() - bar) / 2.0, self.height() - thickness, bar,
-                                                  thickness), thickness / 2.0, thickness / 2.0)
+            length = self.style_info.length
+            diameter = max(4.0, round((length - 10) * 0.4))  # 18 px: 4, 22: 5, 26: 6, 30: 8
+            ring = 1.0 if length <= 18 else 1.5
+            rect = QtCore.QRectF(self.width() - diameter - ring / 2.0, self.height() - diameter - ring / 2.0,
+                                 diameter, diameter)
+            painter.setPen(QtGui.QPen(self.theme.color("toolbarBackground"), ring))
+            painter.drawEllipse(rect)
             return
         painter.setPen(QtGui.QPen(self.theme.color("updateBadgeBorder"), 1))
         painter.drawEllipse(QtCore.QRectF(self.width() - 5 - UPDATE_DOT, (self.height() - UPDATE_DOT) / 2.0,
