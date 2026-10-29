@@ -357,7 +357,7 @@ class SettingsPanel(QtWidgets.QWidget):
             self._config_rows.append(row)
             config_layout.addLayout(row)
             self.segments[key] = segments
-        self.compact_note = label("This position uses compact icon-only buttons. Your text settings stay saved.",
+        self.compact_note = label("This position uses icon-only buttons. Your text settings stay saved.",
                                   "Muted", wrap=True)
         config_layout.addWidget(self.compact_note)
         config.setLayout(config_layout)

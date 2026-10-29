@@ -20,8 +20,9 @@ AREAS = {"top": Qt.TopToolBarArea, "bottom": Qt.BottomToolBarArea, "left": Qt.Le
          "right": Qt.RightToolBarArea}
 TEXT_WIDTHS = {"large": 150, "medium": 116, "small": 88}
 TEXT_HEIGHTS = {"small": 30, "medium": 34, "large": 38}
-ICON_LENGTHS = {("small", "regular"): 22, ("medium", "regular"): 26, ("large", "regular"): 30,
-                ("small", "compact"): 18, ("medium", "compact"): 22, ("large", "compact"): 26}
+# Icon-only buttons: Icon size (S/M/L) alone sets the icon; Spacing only sets the air around it and between buttons.
+ICON_SIZES = {"small": 18, "medium": 22, "large": 26}
+ICON_AIR = {"regular": 2, "compact": 1}  # px on each side of the icon
 BRAND_WIDTH = 96
 GRIP = 17
 UPDATE_DOT = 6.0  # px: a package's update dot at the right end of a text button
@@ -54,9 +55,10 @@ class ToolbarStyle:
         self.gap = 2 if compact else 4
         self.padding = 2 if compact else 5
         if self.icon_only:
-            self.length = ICON_LENGTHS[(self.icon_size_key, self.density)]
+            # Flat Max-style button: the icon fills it but for a thin strip of air on each side.
+            self.icon = ICON_SIZES[self.icon_size_key]
+            self.length = self.icon + 2 * ICON_AIR[self.density]
             self.button = QtCore.QSize(self.length, self.length)
-            self.icon = self.length - 4  # flat Max-style button: the icon fills it, 2 px air on each side
         else:
             height = TEXT_HEIGHTS[self.icon_size_key] - (4 if compact else 0)
             self.button = QtCore.QSize(TEXT_WIDTHS.get(self.button_size, 116), height)
@@ -225,9 +227,9 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         the toolbar colour, so it stays apart from the icon's corner), a dot after the text on a text button."""
         painter.setBrush(self.theme.color("updateBadgeBackground"))
         if self.style_info.icon_only:
-            length = self.style_info.length
-            diameter = max(4.0, round((length - 10) * 0.4))  # 18 px: 4, 22: 5, 26: 6, 30: 8
-            ring = 1.0 if length <= 18 else 1.5
+            icon = self.style_info.icon  # by icon size, so Spacing does not change the dot
+            diameter = max(4.0, round((icon - 6) * 0.4))  # icon 18: 5, 22: 6, 26: 8
+            ring = 1.0 if icon <= 18 else 1.5
             rect = QtCore.QRectF(self.width() - diameter - ring / 2.0, self.height() - diameter - ring / 2.0,
                                  diameter, diameter)
             painter.setPen(QtGui.QPen(self.theme.color("toolbarBackground"), ring))
