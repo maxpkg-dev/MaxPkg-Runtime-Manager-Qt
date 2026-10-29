@@ -225,6 +225,7 @@ QTextBrowser#Description { background: transparent; border: none; color: @textSe
 #ChangelogVersion { color: @textStrong; font-weight: bold; }
 #ChangelogDate { color: @textMuted; font-size: 11px; }
 #ScreenshotMain { border: 1px solid @borderSoft; border-radius: 8px; background: @backgroundDeep; }
+#LightboxSlides { border: none; background: transparent; }
 QPushButton#Thumb { border: 1px solid @borderSoft; border-radius: 6px; background: @surfaceSecondary; padding: 2px; }
 QPushButton#Thumb:checked { border-color: @accentHover; }
 QPushButton#GalleryNav { border: 1px solid @borderStrong; border-radius: 16px; background: @overlay; padding: 0;

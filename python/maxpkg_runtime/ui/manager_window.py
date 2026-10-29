@@ -520,10 +520,39 @@ class BusyCard(QtWidgets.QFrame):
         painter.end()
 
 
+BACKDROP_SCALE = 0.25  # the lightbox blurs a quarter-size copy of the window: cheap, and softer when scaled up
+BACKDROP_BLUR = 10     # blur radius in pixels of that copy (about 40 px on the window)
+BACKDROP_TINT = 0.55   # share of the theme's overlay colour kept over the blurred window
+
+
+def blurred(pixmap, scale=BACKDROP_SCALE, radius=BACKDROP_BLUR):
+    """A soft copy of `pixmap` at `scale` of its size (draw it stretched over the original area)."""
+    small = pixmap.scaled(max(1, int(pixmap.width() * scale)), max(1, int(pixmap.height() * scale)),
+                          Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    small.setDevicePixelRatio(1.0)
+    scene = QtWidgets.QGraphicsScene()
+    item = QtWidgets.QGraphicsPixmapItem(small)
+    effect = QtWidgets.QGraphicsBlurEffect()
+    effect.setBlurRadius(radius)
+    effect.setBlurHints(QtWidgets.QGraphicsBlurEffect.QualityHint)
+    item.setGraphicsEffect(effect)
+    # The blur fades the borders to transparent: render the item a little larger so they fall outside.
+    margin = radius * 2
+    item.setScale((small.width() + 2.0 * margin) / small.width())
+    item.setPos(-margin, -margin * small.height() / float(small.width()))
+    scene.addItem(item)
+    result = QtGui.QImage(small.size(), QtGui.QImage.Format_ARGB32_Premultiplied)
+    result.fill(Qt.transparent)
+    painter = QtGui.QPainter(result)
+    scene.render(painter, QtCore.QRectF(result.rect()), QtCore.QRectF(result.rect()))
+    painter.end()
+    return QtGui.QPixmap.fromImage(result)
+
+
 class ScreenshotPreview(QtWidgets.QWidget):
     """Full-window screenshot viewer with previous/next and close (Esc). Like Fancybox, dragging the image up or
     down fades the backdrop and, past a short distance, throws the image off and closes; the backdrop fades in
-    when it opens."""
+    when it opens. The backdrop is the window behind it, blurred and tinted with the theme's overlay colour."""
 
     def __init__(self, window, shots, index):
         QtWidgets.QWidget.__init__(self, window)
@@ -533,9 +562,12 @@ class ScreenshotPreview(QtWidgets.QWidget):
         self.shots = shots
         self.index = index
         self._shade = 0.0  # backdrop strength 0..1 (it paints itself so a drag can fade it)
+        self._backdrop = blurred(window.grab(window.content_rect()))
         images = window.images
         self.image = SlideView(len(shots), lambda position: images.get(shots[position].url), window.themes,
                                inset=70, dismissible=True, parent=self)
+        # Transparent over the blurred backdrop; unnamed, 3ds Max's own stylesheet paints it grey.
+        self.image.setObjectName("LightboxSlides")
         self.image.set_index(index)
         self.image.index_changed.connect(self._on_index)
         self.image.dismiss_progress.connect(self._on_dismiss_progress)
@@ -583,9 +615,13 @@ class ScreenshotPreview(QtWidgets.QWidget):
             widget.setVisible(resting)
 
     def paintEvent(self, _event):
-        color = QtGui.QColor(self.themes.manager.color("backgroundOverlay"))
-        color.setAlphaF(color.alphaF() * self._shade)
         painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        painter.setOpacity(self._shade)
+        painter.drawPixmap(self.rect(), self._backdrop)
+        painter.setOpacity(1.0)
+        color = QtGui.QColor(self.themes.manager.color("backgroundOverlay"))
+        color.setAlphaF(color.alphaF() * BACKDROP_TINT * self._shade)
         painter.fillRect(self.rect(), color)
         painter.end()
 
