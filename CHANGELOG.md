@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.3
+
+- Added: The Updates tab count turns red while updates are pending.
+- Fixed: In 3ds Max 2027, scripts started from MaxPkg can find their own files.
+- Fixed: Script errors are shown in the MAXScript Listener and the log, not only in a notification.
+- Fixed: Scripts made for other 3ds Max versions are not started or installed, including an MZP downloaded by hand; package details show the supported versions.
+- Fixed: The » button of the toolbar opens a menu of the buttons that do not fit.
+- Fixed: Compact spacing no longer shrinks toolbar icons; only Icon size sets their size.
+- Fixed: Update notifications name the package instead of showing the download address.
+- Fixed: Notifications no longer show links, file paths or error internals; the full text stays in the log.
+
 ## 2.0.2
 
 - Fixed: On 3ds Max older than 2022 the installer says which version is needed and changes nothing; earlier tools and the previous MaxPkg Runtime keep working.
