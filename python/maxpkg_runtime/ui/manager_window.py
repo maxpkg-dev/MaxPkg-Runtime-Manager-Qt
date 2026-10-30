@@ -18,7 +18,7 @@ from .frame import (EDGE, WindowChrome, apply_native_frame, bounded_position, gl
 from .pages import WIDE_DISCOVER, DiscoverPage, InstalledPage
 from .settings_panel import SettingsPanel
 from .widgets import (BrandLogo, Button, ClearableDropdown, IconButton, IconLabel, SearchBox, SlideView, add_action,
-                      add_danger_action, add_menu_title, hbox, label, themed_menu, vbox)
+                      add_danger_action, add_menu_title, hbox, label, repolish, themed_menu, vbox)
 
 MIN_WIDTH = 680
 HEADER_ICON_ONLY = 850  # 720 in the HTML Manager; the header now also holds the window and Support buttons
@@ -38,8 +38,12 @@ class TabButton(QtWidgets.QPushButton):
         self.count.setAlignment(Qt.AlignCenter)
         self._text = text
 
-    def set_count(self, value):
+    def set_count(self, value, alert=False):
+        """`alert`: the count asks for attention (pending updates) and turns red."""
         self.count.setVisible(value is not None)
+        if self.count.property("alert") != ("true" if alert else "false"):
+            self.count.setProperty("alert", "true" if alert else "false")
+            repolish(self.count)
         if value is not None:
             self.count.setText(str(value))
             self.count.adjustSize()
@@ -1280,7 +1284,7 @@ class ManagerWindow(QtWidgets.QWidget):
         count = len(runtime.packages)
         updates = runtime.update_count()
         self.tab_buttons["installed"].set_count(count)
-        self.tab_buttons["updates"].set_count(updates)
+        self.tab_buttons["updates"].set_count(updates, alert=updates > 0)
         self.package_status.setText("{} package{}".format(count, "" if count == 1 else "s"))
         self.update_status.setText("{} update{}".format(updates, "" if updates == 1 else "s"))
         self.update_all_button.setVisible(updates > 0)

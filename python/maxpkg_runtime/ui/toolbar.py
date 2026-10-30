@@ -942,10 +942,13 @@ class ToolbarController(QtCore.QObject):
             return
         menu = themed_menu(None)
         menu.setStyleSheet(self.themes.qss())
-        if self.strip.brand is not None and not self.strip.brand.isVisible():
+        # isVisibleTo, not isVisible: a button the toolbar line pushed out can still report isVisible() == True
+        # (3ds Max 2022 after its window got narrower) while the toolbar has hidden it.
+        toolbar = self.toolbar
+        if self.strip.brand is not None and not self.strip.brand.isVisibleTo(toolbar):
             add_action(menu, "Open Manager", lambda: self.open_manager(""), self.themes, "package")
         for button in self.strip.buttons:
-            if not isinstance(button, ToolbarButton) or button.isVisible():
+            if not isinstance(button, ToolbarButton) or button.isVisibleTo(toolbar):
                 continue
             guid = button.item.guid
             package = self.runtime.package(guid)
