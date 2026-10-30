@@ -914,6 +914,7 @@ class ToolbarController(QtCore.QObject):
         self.strip = DockedStrip(toolbar)
         toolbar.orientationChanged.connect(lambda _orientation: QtCore.QTimer.singleShot(0, self._after_dock_change))
         toolbar.installEventFilter(self)
+        self._hook_overflow(toolbar)
         self.main_window.addToolBar(AREAS[mode], toolbar)
         self._area = AREAS[mode]
         self.toolbar = toolbar
@@ -924,6 +925,53 @@ class ToolbarController(QtCore.QObject):
         self.main_window.addToolBar(AREAS[mode], self.toolbar)
         self.toolbar.show()
         self._area = AREAS[mode]
+
+    def _hook_overflow(self, toolbar):
+        """Qt's chevron expands the toolbar over its neighbours, but the 3ds Max main window keeps a docked
+        toolbar at its line height, so nothing appeared. Unchecked, the chevron's click only collapses (Qt's own
+        slot), and it opens a menu of the buttons that did not fit instead."""
+        extension = toolbar.findChild(QtWidgets.QToolButton, "qt_toolbar_ext_button")
+        if extension is None:
+            return
+        extension.setCheckable(False)
+        extension.setToolTip("More buttons")
+        extension.clicked.connect(lambda _checked=False: self._overflow_menu(extension))
+
+    def _overflow_menu(self, extension):
+        if self.strip is None or not is_valid(extension):
+            return
+        menu = themed_menu(None)
+        menu.setStyleSheet(self.themes.qss())
+        if self.strip.brand is not None and not self.strip.brand.isVisible():
+            add_action(menu, "Open Manager", lambda: self.open_manager(""), self.themes, "package")
+        for button in self.strip.buttons:
+            if not isinstance(button, ToolbarButton) or button.isVisible():
+                continue
+            guid = button.item.guid
+            package = self.runtime.package(guid)
+            name = package.display_name if package is not None else button.item.title
+            action = add_action(menu, name, lambda _checked=False, guid=guid: self.runtime.run(guid), self.themes,
+                                "package")
+            pixmap = self.images.get(button.item.icon_source) if self.images is not None else None
+            if pixmap is not None and not pixmap.isNull():
+                action.setIcon(QtGui.QIcon(pixmap))
+            action.setToolTip(button.item.tooltip.replace("\nDrag to reorder", ""))
+        if not menu.actions():
+            menu.deleteLater()
+            return
+        menu.setToolTipsVisible(True)
+        rect = extension.rect()
+        area = self.main_window.toolBarArea(self.toolbar) if is_valid(self.main_window) else Qt.TopToolBarArea
+        corner = {Qt.LeftToolBarArea: rect.topRight(), Qt.BottomToolBarArea: rect.topLeft(),
+                  Qt.RightToolBarArea: rect.topLeft()}.get(area, rect.bottomLeft())
+        point = extension.mapToGlobal(corner)
+        size = menu.sizeHint()
+        if area == Qt.RightToolBarArea:
+            point.setX(point.x() - size.width())
+        elif area == Qt.BottomToolBarArea:
+            point.setY(point.y() - size.height())
+        exec_menu(menu, point)
+        menu.deleteLater()
 
     def eventFilter(self, watched, event):
         if watched is self.toolbar and event.type() in (QtCore.QEvent.Move, QtCore.QEvent.Show):
