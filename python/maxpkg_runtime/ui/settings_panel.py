@@ -1,6 +1,7 @@
 """Settings modal (inside the Manager window, like the HTML version). Every change saves immediately."""
 
 from ..domain.settings import normalize_endpoint
+from ..domain.storage import size_text
 from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal, disable_max_accelerators
 from .frame import (EDGE, WindowChrome, apply_native_frame, bounded_position, glass_border, native_event,
                     paint_window_shape, prepare_window)
@@ -8,12 +9,13 @@ from .toolbar import ToolbarPreview, ToolbarStyle
 from .widgets import Button, Dropdown, IconLabel, Switch, hbox, label, vbox
 
 PAGES = (("general", "General"), ("updates", "Updates"), ("toolbar", "Toolbar"), ("themes", "Themes"),
-         ("developer", "Developer"), ("endpoint", "Endpoint"), ("about", "About"), ("uninstall", "Uninstall"))
+         ("storage", "Storage"), ("developer", "Developer"), ("endpoint", "Endpoint"), ("about", "About"),
+         ("uninstall", "Uninstall"))
 FREQUENCIES = ((1, "Every hour"), (6, "Every 6 hours"), (12, "Every 12 hours"), (24, "Every day"),
                (48, "Every 2 days"), (168, "Every week"))
 NARROW = 760
 NAV_ICONS = {"general": "sliders-horizontal", "updates": "refresh-cw", "toolbar": "panel-top", "themes": "palette",
-             "developer": "code", "endpoint": "globe", "about": "info", "uninstall": "trash-2"}
+             "storage": "folder-open", "developer": "code", "endpoint": "globe", "about": "info", "uninstall": "trash-2"}
 
 
 class Segments(QtWidgets.QWidget):
@@ -170,6 +172,8 @@ class SettingsPanel(QtWidgets.QWidget):
             button.setChecked(key == page)
         self.stack.setCurrentIndex([key for key, _ in PAGES].index(page))
         self.current_page = page
+        if page == "storage":
+            self._refresh_storage()  # pictures are cached while the window is open
 
     def resizeEvent(self, event):
         QtWidgets.QWidget.resizeEvent(self, event)
@@ -266,6 +270,8 @@ class SettingsPanel(QtWidgets.QWidget):
         self.toolbar_theme.currentIndexChanged.connect(lambda _index: self._set_theme("toolbar", self.toolbar_theme.value()))
         page.addWidget(self.toolbar_theme)
         page.addStretch(1)
+
+        self._build_storage_page()
 
         page = self.pages["developer"]
         page.addWidget(label("Developer", "PageTitle"))
@@ -371,6 +377,38 @@ class SettingsPanel(QtWidgets.QWidget):
         page.addLayout(hbox(None, reset_order, self.reset_position, reset_defaults, spacing=7))
         page.addStretch(1)
 
+    def _build_storage_page(self):
+        themes = self.themes
+        page = self.pages["storage"]
+        page.addWidget(label("Storage", "PageTitle"))
+        page.addWidget(label("Files the Package Manager keeps on this computer.", "Muted"))
+        panel = QtWidgets.QFrame()
+        panel.setObjectName("ConfigPanel")
+        # Size and count as large figures, so how much the cache holds is seen at a glance.
+        self.cache_size = label("", "StorageValue")
+        self.cache_files = label("", "StorageValue")
+        stats = hbox(spacing=10)
+        for value, caption in ((self.cache_size, "On disk"), (self.cache_files, "Pictures")):
+            tile = QtWidgets.QFrame()
+            tile.setObjectName("StorageStat")
+            tile.setLayout(vbox(value, label(caption, "StorageCaption"), spacing=2, margins=(14, 10, 14, 10)))
+            tile.setMinimumWidth(130)
+            stats.addWidget(tile)
+        stats.addStretch(1)
+        open_cache = Button("Open folder", "folder-open", "default", themes)
+        open_cache.clicked.connect(self._open_image_cache)
+        self.clear_cache = Button("Clear cache", "trash-2", "danger", themes)
+        self.clear_cache.clicked.connect(self._clear_image_cache)
+        panel.setLayout(vbox(label("Image cache", "ConfigLabel"),
+                             label("Package icons and screenshots from the catalog, kept so they show faster and "
+                                   "offline. Clearing it is safe: pictures are downloaded again when they are shown.",
+                                   "Muted", wrap=True),
+                             stats,
+                             hbox(open_cache, self.clear_cache, None, spacing=7),
+                             spacing=10, margins=(14, 12, 14, 14)))
+        page.addWidget(panel)
+        page.addStretch(1)
+
     def _build_uninstall_page(self):
         themes = self.themes
         page = self.pages["uninstall"]
@@ -456,6 +494,24 @@ class SettingsPanel(QtWidgets.QWidget):
     def _restore_order(self, snapshot):
         if self.runtime.set_full_order(snapshot):
             self.manager_window.notify("Undone. The toolbar order is back as it was.", "success")
+
+    def _open_image_cache(self):
+        if not self.runtime.open_image_cache():
+            self.manager_window.notify("The image cache folder could not be opened.", "error")
+
+    def _clear_image_cache(self):
+        removed, freed = self.manager_window.images.clear_disk()
+        self._refresh_storage()
+        if removed:
+            self.manager_window.notify("The image cache is cleared.\n{} freed.".format(size_text(freed)), "success")
+        else:
+            self.manager_window.notify("The image cache is already empty.", "info")
+
+    def _refresh_storage(self):
+        files, total = self.manager_window.images.usage()
+        self.cache_size.setText(size_text(total))
+        self.cache_files.setText(str(files))
+        self.clear_cache.setEnabled(files > 0)
 
     def _copy_info(self):
         from ..qt_compat import binding_info

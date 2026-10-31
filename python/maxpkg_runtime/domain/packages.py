@@ -240,6 +240,18 @@ def is_newer(candidate, installed):
     return version_key(candidate) > version_key(installed)
 
 
+def changelog_versions(package):
+    """The changelog grouped by release, in its order: [((version, date), [entries])]. Entries without a version
+    belong to the package's own version."""
+    groups = []
+    for entry in package.changelog:
+        key = (entry.version or package.version or "Unknown", entry.release_date or package.release_date)
+        if not groups or groups[-1][0] != key:
+            groups.append((key, []))
+        groups[-1][1].append(entry)
+    return groups
+
+
 def compatible(package, max_year):
     """min3dsMax <= max_year <= max3dsMax, like the maxpkg.dev API; an empty or zero bound is open."""
     minimum = to_int(package.min_max_version, 0)
@@ -358,6 +370,6 @@ def compact_number(value):
     return str(value)
 
 
-__all__ = ["Package", "ChangelogEntry", "Screenshot", "scan", "read_manifest", "read_mzp_manifest", "is_newer", "compatible",
+__all__ = ["Package", "ChangelogEntry", "Screenshot", "scan", "read_manifest", "read_mzp_manifest", "is_newer", "changelog_versions", "compatible",
            "supported_versions", "incompatibility", "ordered_for_toolbar", "normalized_order", "with_brand_divider", "merge_visible_order", "compact_number", "to_float", "DIVIDER",
            "is_divider", "toolbar_entries"]

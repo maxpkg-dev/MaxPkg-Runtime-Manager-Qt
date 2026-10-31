@@ -3,7 +3,7 @@
 import math
 
 from ..domain import markdown
-from ..domain.packages import compact_number, supported_versions
+from ..domain.packages import changelog_versions, compact_number, supported_versions
 from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal
 from ..services.images import rounded
 from .cards import PackageIcon
@@ -367,7 +367,7 @@ class DetailsPage(ScrollPage):
         tabs = [("description", "Description", None)]
         if shots:
             tabs.append(("screenshots", "Screenshots", shots))
-        tabs.append(("changelog", "Changelog", len(package.changelog)))
+        tabs.append(("changelog", "Changelog", len(changelog_versions(package))))  # releases, not single changes
         for key, text, count in tabs:
             button = DetailsTab(text, count)
             button.setChecked(key == self.tab)
@@ -456,13 +456,7 @@ class DetailsPage(ScrollPage):
         if not package.changelog:
             layout.addWidget(label("No changelog entries were provided with this package.", "Muted"))
             return frame
-        groups = []
-        for entry in package.changelog:
-            key = (entry.version or package.version or "Unknown", entry.release_date or package.release_date)
-            if not groups or groups[-1][0] != key:
-                groups.append((key, []))
-            groups[-1][1].append(entry)
-        for (version, date), entries in groups:
+        for (version, date), entries in changelog_versions(package):
             header = hbox(label(version, "ChangelogVersion"), label(date, "ChangelogDate"), None, spacing=10)
             layout.addSpacing(6)
             layout.addLayout(header)

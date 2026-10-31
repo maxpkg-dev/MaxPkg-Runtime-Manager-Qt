@@ -9,7 +9,8 @@ import zipfile
 from maxpkg_runtime.domain import api, markdown
 from maxpkg_runtime.domain.messages import without_links
 from maxpkg_runtime.domain.ini import IniDocument
-from maxpkg_runtime.domain.packages import (DIVIDER, Package, compact_number, compatible, incompatibility, is_newer,
+from maxpkg_runtime.domain.packages import (DIVIDER, ChangelogEntry, Package, changelog_versions, compact_number,
+                                            compatible, incompatibility, is_newer,
                                             merge_visible_order, normalized_order, ordered_for_toolbar,
                                             read_mzp_manifest, scan, supported_versions, toolbar_entries,
                                             with_brand_divider)
@@ -129,6 +130,21 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(with_brand_divider(["A", "B"]), [DIVIDER, "A", "B"])
         self.assertEqual(with_brand_divider([DIVIDER, "A"]), [DIVIDER, "A"])
         self.assertEqual(with_brand_divider([]), [DIVIDER])
+
+
+class ChangelogVersionsTests(unittest.TestCase):
+    def test_groups_entries_by_release(self):
+        package = Package()
+        package.version, package.release_date = "1.2.0", "2026-10-01"
+        package.changelog = [ChangelogEntry("Added", "A", "1.2.0", "2026-10-01"),
+                             ChangelogEntry("Fixed", "B", "1.2.0", "2026-10-01"),
+                             ChangelogEntry("Fixed", "C", "1.1.0", "2026-09-01"),
+                             ChangelogEntry("Changed", "D")]  # no version: the package's own release
+        groups = changelog_versions(package)
+        self.assertEqual([key for key, _entries in groups],
+                         [("1.2.0", "2026-10-01"), ("1.1.0", "2026-09-01"), ("1.2.0", "2026-10-01")])
+        self.assertEqual([len(entries) for _key, entries in groups], [2, 1, 1])
+        self.assertEqual(changelog_versions(Package()), [])
 
 
 class CompatibilityTests(unittest.TestCase):

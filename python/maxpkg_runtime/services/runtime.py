@@ -266,6 +266,15 @@ class Runtime(QtCore.QObject):
         package = self.package(reference)
         return package is not None and max_api.open_folder(package.install_path)
 
+    def open_image_cache(self):
+        """Explorer on the image cache; the folder is created first, so it opens before any picture is cached."""
+        try:
+            os.makedirs(self.paths.image_cache, exist_ok=True)
+        except OSError as error:
+            log.warning("images", "Cannot create the image cache folder: " + str(error))
+            return False
+        return max_api.open_folder(self.paths.image_cache)
+
     def site_url(self, path=""):
         """The maxpkg.dev site of the configured service (a development endpoint keeps its own site)."""
         origin = re.match(r"^(https?://[^/]+)", self.settings.effective_endpoint)

@@ -288,6 +288,9 @@ QPushButton#SettingsNavButton[danger="true"]:checked { background: @dangerSurfac
 #ConfigLabel { color: @textStrong; font-size: 12px; font-weight: bold; }
 #ConfigPanel, #PreviewPanel { border: 1px solid @borderDefault; border-radius: 12px; background: @surfaceSecondary; }
 #PreviewStage { border: 1px solid @borderSoft; border-radius: 8px; background: @backgroundWindow; }
+#StorageStat { border: 1px solid @borderSoft; border-radius: 10px; background: @backgroundWindow; }
+#StorageValue { color: @textStrong; font-size: 22px; font-weight: bold; }
+#StorageCaption { color: @textMuted; font-size: 11px; }
 #Notice { border: 1px solid @borderSoft; border-radius: 12px; background: @surfaceSecondary; }
 #DangerNotice { border: 1px solid @dangerBorder; border-radius: 12px; background: @dangerSurface; }
 QPushButton#Segment {

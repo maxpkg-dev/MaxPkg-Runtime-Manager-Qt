@@ -8,6 +8,7 @@ import hashlib
 import os
 import time
 
+from ..domain import storage
 from ..qt_compat import QtCore, QtGui, QtSvg, Qt, Signal
 from . import log, network
 
@@ -100,6 +101,22 @@ class ImageService(QtCore.QObject):
 
     def retry_failed(self):
         self._failed.clear()
+
+    @property
+    def folder(self):
+        return self._folder
+
+    def usage(self):
+        """(files, bytes) of the disk cache."""
+        return storage.folder_usage(self._folder)
+
+    def clear_disk(self):
+        """Empty the disk cache; pictures on screen stay and the rest is downloaded again when shown.
+        Returns (removed, bytes freed)."""
+        self._failed.clear()
+        removed, freed = storage.clear_folder(self._folder)
+        log.info("images", "Image cache cleared: {} files, {} bytes".format(removed, freed))
+        return removed, freed
 
     def prune_disk(self):
         """Keep the newest MAX_DISK_FILES files in the cache folder."""
