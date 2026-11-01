@@ -5,6 +5,8 @@
 - Added: The Updates tab count turns red while updates are pending.
 - Added: Settings > Storage shows how much the image cache takes and lets you open its folder or clear it.
 - Fixed: The Changelog tab in package details counts versions, not single changes.
+- Fixed: A screenshot that cannot be loaded shows a message instead of an endless spinner and is tried again when the viewer opens.
+- Changed: The screenshot viewer closes on a click beside the screenshot, and its close button matches the Manager window's.
 - Fixed: In 3ds Max 2027, scripts started from MaxPkg can find their own files.
 - Fixed: Script errors are shown in the MAXScript Listener and the log, not only in a notification.
 - Fixed: Scripts made for other 3ds Max versions are not started or installed, including an MZP downloaded by hand; package details show the supported versions.
