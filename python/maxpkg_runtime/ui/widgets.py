@@ -540,15 +540,21 @@ class SlideView(QtWidgets.QWidget):
 
     index_changed = Signal(int)
     clicked = Signal()
+    clicked_outside = Signal()        # also sent for a click beside the current image (the lightbox closes on it)
     dismiss_progress = Signal(float)  # 0..1 while the image is dragged up or down (dismissible only)
     dismissed = Signal()              # it was thrown off the screen: close the viewer
     GAP = 24
     DISMISS_DISTANCE = 110  # px of vertical drag that closes, like Fancybox; a shorter one springs back
+    FAILED_TEXT = "This screenshot could not be loaded."
 
-    def __init__(self, count, pixmap_for, themes, radius=0, inset=2, dismissible=False, parent=None):
+    def __init__(self, count, pixmap_for, themes, radius=0, inset=2, dismissible=False, failed_for=None,
+                 parent=None):
         """radius: rounded clip of the frame; inset: side margin each image is fitted into (slides still cross
-        the whole widget); dismissible: drag the image up or down to close (the lightbox)."""
+        the whole widget); dismissible: drag the image up or down to close (the lightbox); failed_for(index): True
+        when that image will not come, so a message replaces the endless preloader."""
         QtWidgets.QWidget.__init__(self, parent)
+        self.failed_for = failed_for
+        self._current_rect = QtCore.QRectF()  # where the current image (or its message) was painted
         self.lift = 0.0  # vertical offset of the dragged image
         self._lift_animation = QtCore.QVariantAnimation(self)
         self._lift_animation.setDuration(260)
@@ -582,7 +588,13 @@ class SlideView(QtWidgets.QWidget):
         self._swipe.released.connect(self._on_release)
         self._swipe.dragged_vertical.connect(self._on_lift)
         self._swipe.released_vertical.connect(self._on_lift_release)
-        self._swipe.clicked.connect(self.clicked.emit)
+        self._swipe.clicked.connect(self._on_click)
+
+    def _on_click(self):
+        self.clicked.emit()
+        point = QtCore.QPointF(self.mapFromGlobal(QtGui.QCursor.pos()))
+        if not self._current_rect.isEmpty() and not self._current_rect.contains(point):
+            self.clicked_outside.emit()
 
     # --- drag up or down to dismiss (Fancybox style) ---------------------------------
     def _progress(self):
@@ -718,21 +730,39 @@ class SlideView(QtWidgets.QWidget):
             left = area.left() + step * self._span() + self.offset
             if left - self.inset >= frame.right() or left + area.width() + self.inset <= frame.left():
                 continue
-            pixmap = self._scaled_pixmap((self.index + step) % self.count, size)
+            position = (self.index + step) % self.count
+            pixmap = self._scaled_pixmap(position, size)
+            center = QtCore.QPointF(left + area.width() / 2.0, area.center().y())
             if pixmap is None:
-                loading = True
-                self._paint_preloader(painter, QtCore.QPointF(left + area.width() / 2.0, area.center().y()))
-                continue
-            logical = pixmap.size() / pixmap.devicePixelRatio()
-            target = QtCore.QRectF(left + (area.width() - logical.width()) / 2.0,
-                                   area.top() + (area.height() - logical.height()) / 2.0,
-                                   logical.width(), logical.height())
-            painter.drawPixmap(target, pixmap, QtCore.QRectF(pixmap.rect()))
+                if self.failed_for is not None and self.failed_for(position):
+                    target = self._paint_failed(painter, center)
+                else:
+                    loading = True
+                    self._paint_preloader(painter, center)
+                    target = QtCore.QRectF(center.x() - 20, center.y() - 20, 40, 40)
+            else:
+                logical = pixmap.size() / pixmap.devicePixelRatio()
+                target = QtCore.QRectF(left + (area.width() - logical.width()) / 2.0,
+                                       area.top() + (area.height() - logical.height()) / 2.0,
+                                       logical.width(), logical.height())
+                painter.drawPixmap(target, pixmap, QtCore.QRectF(pixmap.rect()))
+            if step == 0:
+                self._current_rect = target
         painter.end()
         if loading and not self._spin_timer.isActive():
             self._spin_timer.start()
         elif not loading and self._spin_timer.isActive():
             self._spin_timer.stop()
+
+    def _paint_failed(self, painter, center):
+        """An image icon and a short message where a picture could not be downloaded or read; returns its area."""
+        theme = self.themes.manager
+        glyph = icons.pixmap("image-off", theme.color("textMuted"), 32, self.devicePixelRatioF())
+        painter.drawPixmap(QtCore.QPointF(center.x() - 16, center.y() - 30), glyph)
+        painter.setPen(theme.color("textMuted"))
+        text = QtCore.QRectF(center.x() - 160, center.y() + 8, 320, 22)
+        painter.drawText(text, Qt.AlignCenter, self.FAILED_TEXT)
+        return QtCore.QRectF(text.left(), center.y() - 30, text.width(), 60)
 
     def _paint_preloader(self, painter, center):
         """A faint ring with an accent arc that turns and breathes in length."""

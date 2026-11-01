@@ -81,7 +81,8 @@ class ScreenshotViewer(QtWidgets.QWidget):
         self.images = images
         self.compact = compact
         self.index = 0
-        self.main = SlideView(len(shots), lambda position: images.get(shots[position].url), themes, radius=7)
+        self.main = SlideView(len(shots), lambda position: images.get(shots[position].url), themes, radius=7,
+                              failed_for=lambda position: images.failed(shots[position].url))
         self.main.setObjectName("ScreenshotMain")
         self.main.setMinimumHeight(150 if compact else 260)
         self.main.setCursor(Qt.PointingHandCursor)

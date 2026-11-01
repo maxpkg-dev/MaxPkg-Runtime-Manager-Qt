@@ -25,6 +25,9 @@ QPushButton#ChromeButton { min-width: 28px; max-width: 28px; min-height: 28px; m
     border: 1px solid transparent; border-radius: 14px; background: transparent; padding: 0;
 }
 QPushButton#ChromeButton:hover { background: @surfaceHover; border-color: @borderDefault; }
+/* The screenshot viewer's close: the same button, a little larger over the full-window image. */
+QPushButton#ChromeButton[large="true"] { min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px;
+    border-radius: 18px; }
 /* Close turns red on hover with PivotLandia's colours (the same in every theme), behind a light glass edge. */
 QPushButton#ChromeButton[close="true"]:hover { background: #9f3636; border-color: rgba(230, 120, 120, 150); }
 QPushButton#ChromeButton[close="true"]:pressed { background: #842d2d; border-color: rgba(230, 120, 120, 110); }

@@ -569,14 +569,17 @@ class ScreenshotPreview(QtWidgets.QWidget):
         self._shade = 0.0  # backdrop strength 0..1 (it paints itself so a drag can fade it)
         self._backdrop = blurred(window.grab(window.content_rect()))
         images = window.images
+        images.retry([shot.url for shot in shots])  # one that failed before (offline, timeout) gets another try
         self.image = SlideView(len(shots), lambda position: images.get(shots[position].url), window.themes,
-                               inset=70, dismissible=True, parent=self)
+                               inset=70, dismissible=True, failed_for=lambda position: images.failed(shots[position].url),
+                               parent=self)
         # Transparent over the blurred backdrop; unnamed, 3ds Max's own stylesheet paints it grey.
         self.image.setObjectName("LightboxSlides")
         self.image.set_index(index)
         self.image.index_changed.connect(self._on_index)
         self.image.dismiss_progress.connect(self._on_dismiss_progress)
         self.image.dismissed.connect(self.close_preview)
+        self.image.clicked_outside.connect(self.close_preview)  # a click beside the screenshot closes, like Fancybox
         self._fade_in = QtCore.QVariantAnimation(self)
         self._fade_in.setDuration(200)
         self._fade_in.setStartValue(0.0)
@@ -587,12 +590,23 @@ class ScreenshotPreview(QtWidgets.QWidget):
         self.buttons = []
         for icon_name, step in (("gallery-chevron-left", -1), ("gallery-chevron-right", 1), ("x", 0)):
             button = QtWidgets.QPushButton(self)
-            button.setObjectName("GalleryNav")
-            button.setProperty("large", "true")  # perfectly round 40 px buttons in the lightbox
-            button.setFixedSize(40, 40)
+            if step:
+                button.setObjectName("GalleryNav")
+                button.setProperty("large", "true")  # perfectly round 40 px buttons in the lightbox
+                button.setFixedSize(40, 40)
+                window.themes.bind_icon(button, icon_name, "textStrong", 20)
+            else:
+                # Close like the Manager window's own: round, red with a white cross on hover.
+                button.setObjectName("ChromeButton")
+                button.setProperty("close", "true")
+                button.setProperty("large", "true")
+                button.setFixedSize(36, 36)
+                button.setToolTip("Close (Esc)")
+                window.themes.bind_icon(button, icon_name, "textStrong", 18)
+                button.installEventFilter(self)
+                self.close_button = button
             button.setCursor(Qt.PointingHandCursor)
             button.setFocusPolicy(Qt.NoFocus)  # keep the keyboard on the lightbox (Esc, arrows)
-            window.themes.bind_icon(button, icon_name, "textStrong", 20)
             button.clicked.connect(lambda _checked=False, delta=step: self._step(delta))
             self.buttons.append(button)
         window.images.ready.connect(lambda _source: self._paint())
@@ -630,8 +644,20 @@ class ScreenshotPreview(QtWidgets.QWidget):
         painter.fillRect(self.rect(), color)
         painter.end()
 
+    def eventFilter(self, watched, event):
+        if watched is getattr(self, "close_button", None) and event.type() in (QtCore.QEvent.Enter, QtCore.QEvent.Leave):
+            if event.type() == QtCore.QEvent.Enter:
+                watched.setIcon(icons.icon("x", QtGui.QColor("#ffffff"), 18, watched.devicePixelRatioF()))
+            else:
+                self.themes.reapply(watched)  # back to the theme's icon colour
+        return QtWidgets.QWidget.eventFilter(self, watched, event)
+
     def mousePressEvent(self, event):
-        event.accept()  # clicks on the backdrop stay in the lightbox
+        event.accept()  # clicks on the backdrop stay in the lightbox ...
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.close_preview()  # ... and close it, like a click beside the screenshot
 
     def close_preview(self):
         self.hide()
@@ -668,7 +694,7 @@ class ScreenshotPreview(QtWidgets.QWidget):
         middle = self.height() // 2 - 20
         self.buttons[0].move(18, middle)
         self.buttons[1].move(self.width() - 58, middle)
-        self.buttons[2].move(self.width() - 58, 14)
+        self.buttons[2].move(self.width() - 52, 16)
 
     def resizeEvent(self, event):
         QtWidgets.QWidget.resizeEvent(self, event)

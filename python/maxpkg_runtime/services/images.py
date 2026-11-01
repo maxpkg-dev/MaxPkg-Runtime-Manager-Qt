@@ -42,6 +42,13 @@ def _decode(path):
     return None if image.isNull() else image
 
 
+def _remove_quietly(file_path):
+    try:
+        os.remove(file_path)
+    except OSError:
+        pass
+
+
 def _extension(url):
     tail = url.split("?", 1)[0].lower()
     for extension in (".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif"):
@@ -91,8 +98,11 @@ class ImageService(QtCore.QObject):
             image = _decode(image)  # file path: decoded on the main thread
         if error is not None or image is None:
             self._failed.add(source)
-            if error is not None:
-                log.debug("images", source + ": " + network.describe(error))
+            if error is None and source.lower().startswith(("http://", "https://")):
+                _remove_quietly(self._cache_path(source))  # unreadable download: fetch it again on a retry
+            # A warning, not debug: a picture that never shows must be explainable from a user's log.
+            log.warning("images", source + ": " + (network.describe(error) if error is not None
+                                                   else "the file is not an image Qt can read"))
             return
         if len(self._memory) >= MAX_MEMORY_ITEMS:
             self._memory.pop(next(iter(self._memory)))
@@ -101,6 +111,14 @@ class ImageService(QtCore.QObject):
 
     def retry_failed(self):
         self._failed.clear()
+
+    def failed(self, source):
+        """True when `source` could not be downloaded or read in this session (get() does not try it again)."""
+        return source in self._failed
+
+    def retry(self, sources):
+        """Let get() try these sources again, e.g. when the screenshot viewer opens."""
+        self._failed.difference_update(sources)
 
     @property
     def folder(self):
