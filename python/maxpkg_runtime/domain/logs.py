@@ -72,6 +72,21 @@ def log_days(folder):
     return days
 
 
+def clear_logs(folder):
+    """Remove every daily log file of the folder (other files stay). Returns (removed, bytes freed); a file that
+    cannot be removed is skipped."""
+    removed = 0
+    freed = 0
+    for day in log_days(folder):
+        try:
+            os.remove(day.file_path)
+        except OSError:
+            continue
+        removed += 1
+        freed += day.size
+    return removed, freed
+
+
 def day_label(date, today=None):
     """'Today', 'Yesterday' or 'Thu 29 Oct 2026' (English, whatever the Windows language)."""
     today = today or datetime.date.today()
@@ -141,5 +156,5 @@ def _count(number, noun):
     return "{} {}{}".format(number, noun, "" if number == 1 else "s")
 
 
-__all__ = ["FILTERS", "LEVEL_LABELS", "LogDay", "LogRecord", "day_label", "filter_records", "log_days",
-           "parse_records", "read_records", "summary_text"]
+__all__ = ["FILTERS", "LEVEL_LABELS", "LogDay", "LogRecord", "clear_logs", "day_label", "filter_records",
+           "log_days", "parse_records", "read_records", "summary_text"]

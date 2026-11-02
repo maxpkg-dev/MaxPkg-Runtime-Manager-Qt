@@ -83,6 +83,14 @@ class DayTests(unittest.TestCase):
         self.assertEqual(logs.day_label(datetime.date(2026, 11, 1), today), "Yesterday")
         self.assertEqual(logs.day_label(datetime.date(2026, 10, 29), today), "Thu 29 Oct 2026")
 
+    def test_clear_removes_daily_logs_only(self):
+        sizes = sum(day.size for day in logs.log_days(self.folder))
+        removed, freed = logs.clear_logs(self.folder)
+        self.assertEqual(removed, 2)
+        self.assertEqual(freed, sizes)
+        self.assertEqual(sorted(os.listdir(self.folder)), ["other.log", "runtime-2026-02-30.log"])
+        self.assertEqual(logs.clear_logs(os.path.join(self.folder, "missing")), (0, 0))
+
     def test_large_file_is_read_from_its_end(self):
         file_path = logs.log_days(self.folder)[0].file_path
         records = logs.read_records(file_path, limit=60)
