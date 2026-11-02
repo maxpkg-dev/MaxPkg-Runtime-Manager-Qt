@@ -138,10 +138,11 @@ def run():
 
         # --- 1. wrong checksum
         feed_bad = build_release(feed / "bad", "9.9.9", bad_hash=True)
-        os.environ["MAXPKG_RUNTIME_RELEASES_URL"] = feed_bad
         first = launch(sandbox, open_manager=False)
         check("sandbox runs the installed copy", first.runtime.version == "2.0.8" and not first.runtime.self_update.source_checkout())
         updater = first.runtime.self_update
+        updater.releases_url = feed_bad
+        updater.download_prefix = "file:"
         first.runtime.settings.download_automatically = False
         updater.check(manual=True)
         pump(until=lambda: updater.state == "idle")
@@ -173,6 +174,7 @@ def run():
             feed_broken = build_release(feed / "broken", "9.9.10", broken=True)
             updater2 = second.runtime.self_update
             updater2.releases_url = feed_broken
+            updater2.download_prefix = "file:"
             second.runtime.settings.download_automatically = False
             updater2.check(manual=False)
             pump(until=lambda: owner() is not second and owner() is not None and owner().running)
@@ -184,7 +186,6 @@ def run():
                   .read_text(encoding="utf-8").count("broken on purpose") == 0)
     finally:
         stop_owner()
-        os.environ.pop("MAXPKG_RUNTIME_RELEASES_URL", None)
         for name in PROGRAM + ("python.old", "assets.old", "version.ini.old", "StartMaxPkg.ms.old", "uninstall.ms.old"):
             target = sandbox / name
             if target.is_dir():

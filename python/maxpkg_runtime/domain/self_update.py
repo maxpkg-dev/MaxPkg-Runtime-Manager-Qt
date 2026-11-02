@@ -19,6 +19,7 @@ from .packages import is_newer, version_key
 
 REPOSITORY = "maxpkg-dev/MaxPkg-Runtime-Manager-Qt"
 RELEASES_URL = "https://api.github.com/repos/" + REPOSITORY + "/releases?per_page=15"
+DOWNLOAD_PREFIX = "https://github.com/" + REPOSITORY + "/releases/download/"  # nothing else is ever downloaded
 PACKAGE_ASSET = "MaxPkg-Runtime-Manager-Qt.mzp"
 HASH_ASSET = "MaxPkg-Runtime-Manager-Qt.sha256"
 
@@ -51,8 +52,9 @@ def normalize_version(text):
     return text[1:] if text[:1] in ("v", "V") else text
 
 
-def parse_releases(text):
-    """Installable releases from the GitHub API reply: not drafts, with the MZP and its SHA-256 file attached."""
+def parse_releases(text, download_prefix=DOWNLOAD_PREFIX):
+    """Installable releases from the GitHub API reply: not drafts, with the MZP and its SHA-256 file attached, both
+    from this repository's releases (`download_prefix`)."""
     try:
         data = json.loads(text)
     except ValueError:
@@ -69,6 +71,8 @@ def parse_releases(text):
                 assets[asset["name"]] = asset["browser_download_url"]
         version = normalize_version(entry.get("tag_name", ""))
         if not version or PACKAGE_ASSET not in assets or HASH_ASSET not in assets:
+            continue
+        if not (assets[PACKAGE_ASSET].startswith(download_prefix) and assets[HASH_ASSET].startswith(download_prefix)):
             continue
         if not all(part.isdigit() for part in version.split(".")):
             continue

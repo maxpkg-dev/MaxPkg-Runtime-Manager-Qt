@@ -15,7 +15,7 @@ HASH = "a" * 64
 
 def release(tag, prerelease=False, draft=False, assets=(su.PACKAGE_ASSET, su.HASH_ASSET)):
     return {"tag_name": tag, "prerelease": prerelease, "draft": draft, "body": "notes of " + tag,
-            "assets": [{"name": name, "browser_download_url": "https://example.test/" + tag + "/" + name}
+            "assets": [{"name": name, "browser_download_url": su.DOWNLOAD_PREFIX + tag + "/" + name}
                        for name in assets]}
 
 
@@ -27,7 +27,7 @@ class ReleaseSelectionTests(unittest.TestCase):
         found = su.select_update(self.releases(release("v2.0.1", True), release("v2.0.9", True), release("v2.0.3", True)),
                                  "2.0.2", "preview")
         self.assertEqual(found.version, "2.0.9")
-        self.assertEqual(found.package_url, "https://example.test/v2.0.9/" + su.PACKAGE_ASSET)
+        self.assertEqual(found.package_url, su.DOWNLOAD_PREFIX + "v2.0.9/" + su.PACKAGE_ASSET)
 
     def test_versions_compare_numerically(self):
         found = su.select_update(self.releases(release("v2.0.10", True), release("v2.0.9", True)), "2.0.8", "preview")
@@ -54,6 +54,16 @@ class ReleaseSelectionTests(unittest.TestCase):
             su.parse_releases("not json")
         with self.assertRaises(su.UpdateError):
             su.parse_releases('{"message": "rate limit"}')
+
+    def test_files_only_from_this_repository(self):
+        for prefix in ("https://github.com/maxpkg-dev/MaxPkg-Runtime-Manager/releases/download/",  # the MaxScript Runtime
+                       "https://github.com/maxpkg-dev/MaxPkg-Runtime-Manager-Qt.evil.test/releases/download/",
+                       "http://github.com/maxpkg-dev/MaxPkg-Runtime-Manager-Qt/releases/download/",
+                       "https://example.test/"):
+            entry = {"tag_name": "v9.9.9", "assets": [
+                {"name": su.PACKAGE_ASSET, "browser_download_url": prefix + "v9.9.9/" + su.PACKAGE_ASSET},
+                {"name": su.HASH_ASSET, "browser_download_url": su.DOWNLOAD_PREFIX + "v9.9.9/" + su.HASH_ASSET}]}
+            self.assertEqual(su.parse_releases(json.dumps([entry])), [], prefix)
 
 
 class HashTextTests(unittest.TestCase):

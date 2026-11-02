@@ -44,4 +44,6 @@ A folder with `.git`, `.github` or `tests/` (a source checkout) is never overwri
 - `tests/unit/test_self_update.py`: release choice, checksum text, unsafe archives, swap and rollback (run with `tests/run_unit.py`).
 - `tests/max/self_update_e2e.py` (inside Max): wrong checksum refused, automatic update from a file:// feed, rollback of
   a release that does not start. It backs up and restores the installed copy and restarts the Runtime several times.
-- Test hook: `MAXPKG_RUNTIME_RELEASES_URL` replaces the release feed (same JSON as the GitHub API).
+- Only this repository's releases are used: both files must come from
+  `https://github.com/maxpkg-dev/MaxPkg-Runtime-Manager-Qt/releases/download/`, and nothing in the environment can change
+  that. The in-Max test points `releases_url` and `download_prefix` of its own updater object at a local feed.

@@ -49,8 +49,9 @@ class SelfUpdater(QtCore.QObject):
         # The Controller sets this: is the Manager
         # window open (it is opened again after the restart).
         self.manager_is_open = lambda: False
-        # Test hook: another feed with the same JSON format (also file:// for a local test).
-        self.releases_url = os.environ.get("MAXPKG_RUNTIME_RELEASES_URL") or rules.RELEASES_URL
+        # Only this repository's releases. The in-Max test sets these two to a local feed on this object.
+        self.releases_url = rules.RELEASES_URL
+        self.download_prefix = rules.DOWNLOAD_PREFIX
         self._stopped = False
 
     # ----------------------------------------------------------------- facts
@@ -87,7 +88,7 @@ class SelfUpdater(QtCore.QObject):
         releases = []
         if error is None:
             try:
-                releases = rules.parse_releases(_read_text(path))
+                releases = rules.parse_releases(_read_text(path), self.download_prefix)
             except (OSError, rules.UpdateError) as problem:
                 error = problem
         _remove(path)
