@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.8
+
+- Added: The Package Manager updates itself from its GitHub releases: the download is checked against the published SHA-256, and if the new version does not start, the previous one comes back. Versions older than this one still need a manual install once.
+- Fixed: Pictures in a package description are shown as pictures instead of links, as on maxpkg.dev: pictures on consecutive lines form a gallery, others sit in the text, and a click enlarges them. Pictures load only from the maxpkg.dev content server.
+- Improved: The large icons of loading and empty pages are animated like the other Manager icons, and Everything is up to date shows a check mark.
+
 ## 2.0.7
 
 - Added: Package details have a Videos tab with the package's videos from maxpkg.dev; a click opens the video in the browser.
