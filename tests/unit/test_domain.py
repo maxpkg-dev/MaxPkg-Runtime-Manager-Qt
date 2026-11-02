@@ -204,6 +204,12 @@ class ApiTests(unittest.TestCase):
                "[g2]\nName=Future\nVersion=1\nMin3dsMax=2099\n"
                "[g3]\nName=Old\nVersion=1\nMin3dsMax=2018\nMax3dsMax=2024\n")
 
+    def test_split_references(self):
+        self.assertEqual(api.split_references("aa-1;BB-2; cc-3;;aa-1"), ["aa-1", "BB-2", "cc-3"])
+        self.assertEqual(api.split_references('#("aa-1", "bb-2")'), ["aa-1", "bb-2"])
+        self.assertEqual(api.split_references("aa-1,bb-2\ncc-3"), ["aa-1", "bb-2", "cc-3"])
+        self.assertEqual(api.split_references(""), [])
+
     def test_catalog_filters_incompatible(self):
         page = api.parse_catalog(self.CATALOG, 2027)
         self.assertEqual([package.guid for package in page.packages], ["g1"])

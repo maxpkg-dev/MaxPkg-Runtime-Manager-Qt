@@ -8,6 +8,7 @@ destroys the window; the Runtime (toolbar, update checks) keeps running until th
 import os
 
 from . import qt_compat
+from .domain.api import split_references
 from .domain.ini import IniDocument
 from .qt_compat import QtCore, QtGui, QtWidgets, is_valid, screen_at
 from .services import log, max_api
@@ -219,6 +220,7 @@ class Controller:
         if command == "isStarted":
             return self.running
         if not self.running:
+            log.warning("facade", "MaxPkg.{} was called while the Package Manager is not running".format(command))
             return False
         if command == "shutdown":
             self._later(0, self.stop)  # never destroy the Controller inside its own call
@@ -239,10 +241,20 @@ class Controller:
                 self._later(0, lambda: self.runtime.warn_if_incompatible(argument))
             return present if command == "packageInstalled" else not present
         if command == "install":
-            if self.runtime.operation:
-                return "Another package operation is already running in MaxPkg Package Manager."
+            # While another operation runs the package waits in the queue: a collection installer that calls
+            # MaxPkg.install for each package gets every one installed, one after another.
             self.open_manager("")
-            return True if self.runtime.install(argument) else "The package could not be installed."
+            return True if self.runtime.request_install(argument) else "The package could not be installed."
+        if command == "installMany":
+            references = split_references(argument)
+            if not references:
+                log.warning("facade", "MaxPkg.installMany without packages: " + argument)
+                return "No packages were given."
+            log.info("installer", "{} packages requested: {}".format(len(references), ", ".join(references)))
+            self.open_manager("")
+            for reference in references:
+                self.runtime.request_install(reference)
+            return True
         if command == "uninstall":
             return bool(self.runtime.uninstall(argument))
         log.warning("facade", "Unknown MaxPkg call: " + command)

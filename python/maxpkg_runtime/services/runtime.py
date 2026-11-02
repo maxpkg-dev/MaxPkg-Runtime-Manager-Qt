@@ -108,6 +108,7 @@ class Runtime(QtCore.QObject):
         self.details = {}             # guid_lower -> remote Package with details
         self.details_errors = {}
         self.operation = ""           # '' when no critical operation runs
+        self.install_queue = []       # references MaxScript asked to install while an operation ran
         self.checking_updates = False
         self.connection = "unknown"   # online / offline
         self._catalog_ticket = 0
@@ -121,6 +122,10 @@ class Runtime(QtCore.QObject):
 
     def stop(self):
         self._stopped = True
+        if self.install_queue:
+            log.warning("installer", "Stopped with {} queued installs: {}".format(len(self.install_queue),
+                                                                                 ", ".join(self.install_queue)))
+            self.install_queue = []
         self.network.stop()
 
     def say(self, text, kind="info", actions=None):
@@ -480,6 +485,7 @@ class Runtime(QtCore.QObject):
     # ----------------------------------------------------------------- critical operations
     def _begin(self, message):
         if self.operation:
+            log.warning("installer", "Refused while another operation runs ({}): {}".format(self.operation, message))
             self.say("Another package operation is already running.", "warning")
             return False
         self.operation = message
@@ -489,6 +495,32 @@ class Runtime(QtCore.QObject):
     def _finish(self):
         self.operation = ""
         self.busy_changed.emit("")
+        if self.install_queue:
+            QtCore.QTimer.singleShot(0, self._next_queued)  # after this operation's message and callback
+
+    def request_install(self, reference):
+        """An install asked for from MaxScript (MaxPkg.install / installMany, such as a maxpkg.dev collection
+        installer). It starts now, or waits for the running operation and earlier requests instead of being refused.
+        Returns False only for an empty reference."""
+        reference = (reference or "").strip()
+        if not reference:
+            return False
+        if reference.lower() in (queued.lower() for queued in self.install_queue):
+            log.info("installer", "Already waiting to be installed: " + reference)
+            return True
+        if self.operation or self.install_queue:
+            self.install_queue.append(reference)
+            log.info("installer", "Queued {} ({} waiting)".format(reference, len(self.install_queue)))
+            return True
+        log.info("installer", "Install requested: " + reference)
+        return self.install(reference)
+
+    def _next_queued(self):
+        if self._stopped or self.operation or not self.install_queue:
+            return  # an operation started meanwhile (Update All): its end calls this again
+        reference = self.install_queue.pop(0)
+        log.info("installer", "Installing from the queue: {} ({} left)".format(reference, len(self.install_queue)))
+        self.install(reference)
 
     def install(self, reference, on_done=None, updating=False, previous=None):
         """Resolve (API) and download asynchronously, then fileIn the MZP on the main thread and verify.

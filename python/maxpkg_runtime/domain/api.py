@@ -3,6 +3,8 @@
 All endpoints are POST application/x-www-form-urlencoded; responses are INI text.
 """
 
+import re
+
 try:
     from urllib.parse import urlencode
 except ImportError:  # pragma: no cover
@@ -89,6 +91,16 @@ def categories_request(max_year, runtime_version, channel="stable"):
 
 def details_request(reference, max_year, runtime_version, channel="stable"):
     return Request("packages/details", [("package", reference)] + _common(max_year, runtime_version, channel))
+
+
+def split_references(text):
+    """Package references of one MaxPkg.installMany call: GUIDs, ids or links separated by ';', ',' or white space,
+    without repeats. A MaxScript array that arrives as '#("a", "b")' loses its quotes and brackets too."""
+    references = []
+    for part in re.split(r'[;,\s"()#]+', text or ""):
+        if part and part.lower() not in (known.lower() for known in references):
+            references.append(part)
+    return references
 
 
 def resolve_request(reference, max_year, runtime_version, channel="stable"):

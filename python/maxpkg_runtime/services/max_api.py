@@ -122,10 +122,11 @@ def execute(source):
 
 
 # MaxScript `MaxPkg` global with the old Runtime's public API. Package installers made by MaxPkg Packager install
-# silently only when `MaxPkg` exists, then report `MaxPkg.packageInstalled guid`; the maxpkg.dev one-click
-# installer calls `isStarted`, `start` and `install`. Each call hands its command to the Python Controller.
+# silently only when `MaxPkg` exists, then report `MaxPkg.packageInstalled guid`; the maxpkg.dev one-click and
+# collection installers call `isStarted`, `start`, `install` and `installMany`. Each call hands its command to the
+# Python Controller.
 _FACADE_SOURCE = r'''(
-    struct MaxPkgPackageManagerResultData (success = false, message = "")
+    struct MaxPkgPackageManagerResultData (success = false, message = "", errorCode = "")
     struct MaxPkgPackageManagerFacade (
         isPackageManager = true,
         version = "@VERSION@",
@@ -178,6 +179,20 @@ _FACADE_SOURCE = r'''(
             local reply = call "install" argumentText:packageReference
             if (reply == true) do return MaxPkgPackageManagerResultData success:true message:"Installing in MaxPkg Package Manager."
             return MaxPkgPackageManagerResultData message:(if (reply == undefined) then "The package could not be installed." else reply as string)
+        ),
+        -- Several packages in one call: GUIDs separated by ";" (or an array). The Manager installs them one after
+        -- another and reports each one; the caller does not wait.
+        fn installMany packageReferences = (
+            if (not (start())) do return MaxPkgPackageManagerResultData message:"MaxPkg Package Manager could not be started."
+            local referencesText = ""
+            if (classOf packageReferences == Array) then (
+                for reference in packageReferences do referencesText += (reference as string) + ";"
+            ) else (
+                referencesText = packageReferences as string
+            )
+            local reply = call "installMany" argumentText:referencesText
+            if (reply == true) do return MaxPkgPackageManagerResultData success:true message:"Installing in MaxPkg Package Manager."
+            return MaxPkgPackageManagerResultData message:(if (reply == undefined) then "The packages could not be installed." else reply as string)
         ),
         fn uninstall packageReference showNotification:true = (
             if (not (start())) do return false
