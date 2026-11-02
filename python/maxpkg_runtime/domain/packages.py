@@ -30,6 +30,31 @@ class Screenshot:
         self.sort_order = sort_order
 
 
+
+class Video:
+    """A package video on a video site (YouTube). The Manager shows its thumbnail and opens `url` in the browser."""
+
+    __slots__ = ("provider", "video_id", "url", "title", "thumbnail_url", "duration_seconds", "sort_order")
+
+    def __init__(self, url="", title="", thumbnail_url="", provider="", video_id="", duration_seconds=0, sort_order=0):
+        self.provider = provider
+        self.video_id = video_id
+        self.url = url
+        self.title = title
+        self.thumbnail_url = thumbnail_url
+        self.duration_seconds = duration_seconds
+        self.sort_order = sort_order
+
+    @property
+    def duration_text(self):
+        """'4:05', '1:02:03', or '' when unknown."""
+        seconds = self.duration_seconds
+        if seconds <= 0:
+            return ""
+        hours, rest = divmod(seconds, 3600)
+        minutes, seconds = divmod(rest, 60)
+        return "{}:{:02d}:{:02d}".format(hours, minutes, seconds) if hours else "{}:{:02d}".format(minutes, seconds)
+
 class Package:
     """One package: installed (from manifest.ini) or remote (from the catalog API)."""
 
@@ -73,6 +98,7 @@ class Package:
         self.toolbar_order = 0
         self.changelog = []
         self.screenshots = []
+        self.videos = []
         self.is_remote = False
         self.details_loaded = False
         self.update_available = False
@@ -371,6 +397,6 @@ def compact_number(value):
     return str(value)
 
 
-__all__ = ["Package", "ChangelogEntry", "Screenshot", "scan", "read_manifest", "read_mzp_manifest", "is_newer", "changelog_versions", "compatible",
+__all__ = ["Package", "ChangelogEntry", "Screenshot", "Video", "scan", "read_manifest", "read_mzp_manifest", "is_newer", "changelog_versions", "compatible",
            "supported_versions", "incompatibility", "ordered_for_toolbar", "normalized_order", "with_brand_divider", "merge_visible_order", "compact_number", "to_float", "DIVIDER",
            "is_divider", "toolbar_entries"]

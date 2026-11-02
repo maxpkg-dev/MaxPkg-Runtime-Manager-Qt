@@ -210,6 +210,24 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(api.split_references("aa-1,bb-2\ncc-3"), ["aa-1", "bb-2", "cc-3"])
         self.assertEqual(api.split_references(""), [])
 
+    def test_videos(self):
+        text = ("[meta]\nSuccess=true\n[package]\nGuid=g1\nName=Max Ultra MCP\nVersion=1.2.1\n"
+                "[videos]\nCount=4\n"
+                "[video_1]\nProvider=youtube\nVideoId=OFMQ7-k5TQQ\nUrl=https://www.youtube.com/watch?v=OFMQ7-k5TQQ\n"
+                "Title=Dropper\nThumbnailUrl=https://i.ytimg.com/vi/OFMQ7-k5TQQ/hqdefault.jpg\nDurationSeconds=245\n"
+                "SortOrder=2\n"
+                "[video_2]\nProvider=youtube\nVideoId=_VtguVC1ATE\nTitle=Intro\nDurationSeconds=\nSortOrder=1\n"
+                "[video_3]\nProvider=other\nUrl=javascript:alert(1)\nTitle=Bad link\n"
+                "[video_4]\nProvider=youtube-playlist\nUrl=https://www.youtube.com/playlist?list=PL1\nTitle=All\n")
+        package = api.parse_details(text, 2027)
+        self.assertEqual([video.title for video in package.videos], ["Intro", "Dropper", "All"])
+        intro, dropper, playlist = package.videos
+        self.assertEqual(intro.url, "https://www.youtube.com/watch?v=_VtguVC1ATE")  # built from the id
+        self.assertEqual(intro.thumbnail_url, "https://i.ytimg.com/vi/_VtguVC1ATE/hqdefault.jpg")
+        self.assertEqual((intro.duration_text, dropper.duration_text), ("", "4:05"))
+        self.assertEqual(playlist.thumbnail_url, "")
+        self.assertEqual(api.parse_updates(text, 2027).keys(), {"g1"})  # video sections are never packages
+
     def test_published_sha256(self):
         sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         resolved = api.parse_details("[meta]\nSuccess=true\n[package]\nGuid=g1\nName=Prune Scene\nVersion=4.2.1\n"

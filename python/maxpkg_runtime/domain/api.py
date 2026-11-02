@@ -11,11 +11,11 @@ except ImportError:  # pragma: no cover
     from urllib import urlencode
 
 from .ini import IniDocument, to_float, to_int
-from .packages import ChangelogEntry, Package, Screenshot, compatible, incompatibility
+from .packages import ChangelogEntry, Package, Screenshot, Video, compatible, incompatibility
 
 SORT_MODES = ("popular", "newest", "rating", "downloads", "name")
 PAGE_SIZE = 24
-_RESERVED = ("error", "meta", "catalog", "response", "changelog", "screenshots")
+_RESERVED = ("error", "meta", "catalog", "response", "changelog", "screenshots", "videos")
 
 
 class ApiError(Exception):
@@ -162,6 +162,33 @@ def _screenshots(document):
     return shots
 
 
+
+def _web_link(text):
+    """`text` when it is an http(s) link, else '' (a package page must not open other schemes)."""
+    text = (text or "").strip()
+    return text if text.lower().startswith(("https://", "http://")) else ""
+
+
+def _videos(document):
+    """Package videos in page order. A YouTube entry without a link or thumbnail gets the standard ones from its id."""
+    videos = []
+    for index in range(1, to_int(document.get("videos", "Count", "0")) + 1):
+        section = "video_" + str(index)
+        read = lambda *keys: document.get_any(section, keys)  # noqa: E731
+        provider = read("Provider", "provider").lower()
+        video_id = read("VideoId", "videoId")
+        url = _web_link(read("Url", "url"))
+        thumbnail = _web_link(read("ThumbnailUrl", "thumbnailUrl"))
+        if provider == "youtube" and re.match(r"^[A-Za-z0-9_-]{6,20}$", video_id):
+            url = url or "https://www.youtube.com/watch?v=" + video_id
+            thumbnail = thumbnail or "https://i.ytimg.com/vi/" + video_id + "/hqdefault.jpg"
+        if url:
+            videos.append(Video(url, read("Title", "title"), thumbnail, provider, video_id,
+                                to_int(read("DurationSeconds", "durationSeconds") or "0"),
+                                to_int(read("SortOrder", "sortOrder") or str(index))))
+    videos.sort(key=lambda video: video.sort_order)
+    return videos
+
 def _package(document, section, details=False):
     read = lambda *keys: document.get_any(section, keys)  # noqa: E731
     package = Package(is_remote=True, details_loaded=details)
@@ -208,6 +235,7 @@ def _package(document, section, details=False):
         entry.release_date = entry.release_date or package.release_date
     if details:
         package.screenshots = _screenshots(document)
+        package.videos = _videos(document)
     return package
 
 
@@ -215,7 +243,7 @@ def _packages(document, details=False, require_name=True):
     found = []
     for section in document.sections():
         lowered = section.lower()
-        if lowered in _RESERVED or lowered.startswith(("changelog_", "screenshot_")) or lowered.endswith(".changelog"):
+        if lowered in _RESERVED or lowered.startswith(("changelog_", "screenshot_", "video_")) or lowered.endswith(".changelog"):
             continue
         package = _package(document, section, details)
         if package.guid and (package.name or not require_name):

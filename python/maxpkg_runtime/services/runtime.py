@@ -306,6 +306,14 @@ class Runtime(QtCore.QObject):
                 "support": package.support_url, "purchase": package.purchase_url,
                 "license": package.license_url}.get(kind, "")
 
+    def open_video(self, url):
+        """A package video in the browser (only http and https links open)."""
+        if not max_api.open_url(url):
+            self.say("This video is not available.", "warning")
+            return False
+        log.info("details", "Opened video " + url)
+        return True
+
     def open_link(self, package, kind):
         url = self.link_url(package, kind)
         if not max_api.open_url(url):
@@ -395,8 +403,8 @@ class Runtime(QtCore.QObject):
         if remote is None:
             return installed
         merged = Package(**installed.__dict__)
-        for field in ("full_description", "screenshots", "rating", "review_count", "download_count", "icon_url",
-                      "category"):
+        for field in ("full_description", "screenshots", "videos", "rating", "review_count", "download_count",
+                      "icon_url", "category"):
             setattr(merged, field, getattr(remote, field))
         if remote.changelog:
             merged.changelog = remote.changelog

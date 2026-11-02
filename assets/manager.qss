@@ -233,6 +233,7 @@ QPushButton#CategoryItem:checked { border-color: @successBorder; background: @su
 #PurchaseNotice QLabel { color: @textSecondary; }
 QTextBrowser#Description { background: transparent; border: none; color: @textSecondary; }
 #ChangelogVersion { color: @textStrong; font-weight: bold; }
+#VideoTitle { color: @textStrong; font-size: 13px; font-weight: bold; }
 #ChangelogDate { color: @textMuted; font-size: 11px; }
 #ScreenshotMain { border: 1px solid @borderSoft; border-radius: 8px; background: @backgroundDeep; }
 #LightboxSlides { border: none; background: transparent; }

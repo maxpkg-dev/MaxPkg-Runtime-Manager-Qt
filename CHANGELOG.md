@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.7
+
+- Added: Package details have a Videos tab with the package's videos from maxpkg.dev; a click opens the video in the browser.
+
 ## 2.0.6
 
 - Added: A downloaded package is checked against the SHA-256 published by maxpkg.dev before it is installed; a file that does not match is deleted and not installed.

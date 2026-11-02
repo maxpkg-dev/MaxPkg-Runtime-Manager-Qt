@@ -1,10 +1,10 @@
-"""Package Details page: hero, purchase notice, Description/Screenshots/Changelog tabs, information table."""
+"""Package Details page: hero, purchase notice, Description/Screenshots/Videos/Changelog tabs, information table."""
 
 import math
 
 from ..domain import markdown
 from ..domain.packages import changelog_versions, compact_number, supported_versions
-from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal
+from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal, event_pos
 from ..services.images import rounded
 from .cards import PackageIcon
 from .pages import ScrollPage
@@ -191,6 +191,114 @@ class ScreenshotViewer(QtWidgets.QWidget):
         self._paint()
 
 
+class VideoThumbnail(QtWidgets.QWidget):
+    """16:9 thumbnail of a package video with a round play button and the duration; a click opens the video."""
+
+    clicked = Signal()
+    RADIUS = 8
+
+    def __init__(self, video, images, themes, parent=None):
+        QtWidgets.QWidget.__init__(self, parent)
+        self.video = video
+        self.images = images
+        self.themes = themes
+        self._hover = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Watch on YouTube" if video.provider.startswith("youtube") else "Watch in your browser")
+        policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+        images.ready.connect(self._on_ready)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return int(width * 9 / 16)
+
+    def sizeHint(self):
+        return QtCore.QSize(320, 180)
+
+    def _on_ready(self, source):
+        if source == self.video.thumbnail_url:
+            self.update()
+
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+        QtWidgets.QWidget.enterEvent(self, event)
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+        QtWidgets.QWidget.leaveEvent(self, event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event_pos(event)):
+            self.clicked.emit()
+
+    def paintEvent(self, _event):
+        theme = self.themes.manager
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        area = QtCore.QRectF(self.rect())
+        clip = QtGui.QPainterPath()
+        clip.addRoundedRect(area, self.RADIUS, self.RADIUS)
+        painter.setClipPath(clip)
+        painter.fillRect(area, theme.color("surfaceSecondary"))
+        picture = self.images.get(self.video.thumbnail_url) if self.video.thumbnail_url else None
+        if picture is not None and not picture.isNull():
+            # Fill the frame (YouTube thumbnails carry black bars at 4:3), centred.
+            size = picture.size().scaled(self.size(), Qt.KeepAspectRatioByExpanding)
+            target = QtCore.QRectF((self.width() - size.width()) / 2.0, (self.height() - size.height()) / 2.0,
+                                   size.width(), size.height())
+            painter.drawPixmap(target, picture, QtCore.QRectF(picture.rect()))
+        shade = QtGui.QColor(0, 0, 0, 40 if self._hover else 70)
+        painter.fillRect(area, shade)
+        painter.setClipping(False)
+        # Play button: a dark disc with a white triangle, accent on hover.
+        radius = max(18.0, min(30.0, self.width() / 12.0))
+        center = area.center()
+        disc = QtGui.QColor(theme.color("accent")) if self._hover else QtGui.QColor(0, 0, 0, 165)
+        painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 210), 1.5))
+        painter.setBrush(disc)
+        painter.drawEllipse(center, radius, radius)
+        side = radius * 0.8
+        triangle = QtGui.QPolygonF([QtCore.QPointF(center.x() - side * 0.38, center.y() - side * 0.5),
+                                    QtCore.QPointF(center.x() - side * 0.38, center.y() + side * 0.5),
+                                    QtCore.QPointF(center.x() + side * 0.55, center.y())])
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QtGui.QColor("#ffffff"))
+        painter.drawPolygon(triangle)
+        duration = self.video.duration_text
+        if duration:
+            font = QtGui.QFont(self.font())
+            font.setPixelSize(11)
+            font.setBold(True)
+            painter.setFont(font)
+            metrics = QtGui.QFontMetrics(font)
+            pill = QtCore.QRectF(0, 0, metrics.horizontalAdvance(duration) + 12, metrics.height() + 4)
+            pill.moveBottomRight(area.bottomRight() - QtCore.QPointF(8, 8))
+            painter.setBrush(QtGui.QColor(0, 0, 0, 190))
+            painter.drawRoundedRect(pill, 4, 4)
+            painter.setPen(QtGui.QColor("#ffffff"))
+            painter.drawText(pill, Qt.AlignCenter, duration)
+        painter.end()
+
+
+class VideoCard(QtWidgets.QWidget):
+    """Thumbnail and title of one package video."""
+
+    def __init__(self, video, images, themes, on_open, parent=None):
+        QtWidgets.QWidget.__init__(self, parent)
+        self.thumbnail = VideoThumbnail(video, images, themes)
+        self.thumbnail.clicked.connect(lambda: on_open(video))
+        title = label(video.title or "Video", "VideoTitle", wrap=True)
+        title.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.setLayout(vbox(self.thumbnail, title, spacing=8))
+
+
 class DetailsPage(ScrollPage):
     def __init__(self, window, parent=None):
         ScrollPage.__init__(self, parent)
@@ -363,11 +471,13 @@ class DetailsPage(ScrollPage):
     def _tabs(self, package):
         row = hbox(spacing=0)
         shots = len(package.screenshots) if self.single_column else 0
-        if self.tab == "screenshots" and not shots:
+        if (self.tab == "screenshots" and not shots) or (self.tab == "videos" and not package.videos):
             self.tab = "description"
         tabs = [("description", "Description", None)]
         if shots:
             tabs.append(("screenshots", "Screenshots", shots))
+        if package.videos:
+            tabs.append(("videos", "Videos", len(package.videos)))
         tabs.append(("changelog", "Changelog", len(changelog_versions(package))))  # releases, not single changes
         for key, text, count in tabs:
             button = DetailsTab(text, count)
@@ -394,6 +504,8 @@ class DetailsPage(ScrollPage):
             return frame
         if self.tab == "changelog":
             return self._changelog(package)
+        if self.tab == "videos":
+            return self._videos(package)
         holder = QtWidgets.QWidget()
         frame, layout = section("Description")
         browser = AutoHeightBrowser()
@@ -472,6 +584,22 @@ class DetailsPage(ScrollPage):
                 row.addWidget(badge, 0, Qt.AlignTop)
                 row.addWidget(text, 1)
                 layout.addLayout(row)
+        return frame
+
+    def _videos(self, package):
+        """Video cards, two per row (one video takes the whole width); a click opens it in the browser."""
+        frame, layout = section("Videos")
+        grid = QtWidgets.QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(16)
+        columns = 1 if len(package.videos) == 1 else 2
+        for position, video in enumerate(package.videos):
+            card = VideoCard(video, self.manager_window.images, self.manager_window.themes,
+                             lambda chosen: self.runtime.open_video(chosen.url))
+            grid.addWidget(card, position // columns, position % columns, Qt.AlignTop)
+        for column in range(columns):
+            grid.setColumnStretch(column, 1)
+        layout.addLayout(grid)
         return frame
 
     def _side_gallery(self, package):
