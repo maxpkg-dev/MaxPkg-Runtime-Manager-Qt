@@ -100,31 +100,38 @@
         return "import runpy; runpy.run_path('" + pythonPath + "', run_name='__main__')"
     )
 
-    fn maxScriptStringLiteral sourceContent = (
-        local literalContent = substituteString (sourceContent as string) @"\" @"\\"
-        literalContent = substituteString literalContent "\"" "\\\""
-        return "\"" + literalContent + "\""
-    )
-
     fn runPython pythonFilePath = (
         if (not (doesFileExist pythonFilePath)) do throw ("Package Manager file is missing:\n" + pythonFilePath)
         python.Execute (pythonRunCommand pythonFilePath)
         return true
     )
 
-    fn writeStartupShim shimPath runtimeRoot = (
-        local entryFile = runtimeRoot + @"python\startup.py"
+    -- MaxScript that runs one of the program's Python files. A startup or macro folder can be shared by several 3ds Max
+    -- versions, so the file is looked up in the temp folder of the 3ds Max running the script (never a fixed path),
+    -- and 3ds Max older than 2022 (release 24000) skips it: it has neither the Python nor the Qt the program needs.
+    fn pythonEntryLines entryName indent missingLine = (
+        local lines = ""
+        lines += indent + "if ((maxVersion())[1] >= 24000) do (\n"
+        lines += indent + "    local entryPath = (getDir #temp) + @\"\\MaxPkg-Runtime-Manager-Qt\\python\\" + entryName + "\"\n"
+        lines += indent + "    if (doesFileExist entryPath) then (\n"
+        lines += indent + "        try (\n"
+        lines += indent + "            local pythonPath = substituteString (substituteString entryPath @\"\\\" \"/\") \"'\" @\"\\'\"\n"
+        lines += indent + "            python.Execute (\"import runpy; runpy.run_path('\" + pythonPath + \"', run_name='__main__')\")\n"
+        lines += indent + "        ) catch (\n"
+        lines += indent + "            format \"MaxPkg Package Manager could not start: %\\n\" (getCurrentException())\n"
+        lines += indent + "        )\n"
+        lines += indent + "    ) else (\n"
+        lines += indent + "        " + missingLine + "\n"
+        lines += indent + "    )\n"
+        lines += indent + ")\n"
+        return lines
+    )
+
+    fn writeStartupShim shimPath = (
         local shimContent = ""
         shimContent += "-- Starts MaxPkg Package Manager with 3ds Max. Written by install.ms.\n"
         shimContent += "(\n"
-        shimContent += "    local entryPath = " + (maxScriptPathLiteral entryFile) + "\n"
-        shimContent += "    if (doesFileExist entryPath) do (\n"
-        shimContent += "        try (\n"
-        shimContent += "            python.Execute " + (maxScriptStringLiteral (pythonRunCommand entryFile)) + "\n"
-        shimContent += "        ) catch (\n"
-        shimContent += "            format \"MaxPkg Package Manager could not start: %\\n\" (getCurrentException())\n"
-        shimContent += "        )\n"
-        shimContent += "    )\n"
+        shimContent += pythonEntryLines "startup.py" "    " "()"
         shimContent += ")\n"
         return writeTextFile shimPath shimContent
     )
@@ -141,12 +148,7 @@
         macroContent += "iconName: " + (maxScriptPathLiteral (runtimeRoot + @"assets\icons\maxpkg-logo.svg")) + "\n"
         macroContent += "(\n"
         macroContent += "    on execute do (\n"
-        macroContent += "        local entryPath = " + (maxScriptPathLiteral (runtimeRoot + @"python\open.py")) + "\n"
-        macroContent += "        if (doesFileExist entryPath) then (\n"
-        macroContent += "            python.Execute " + (maxScriptStringLiteral (pythonRunCommand (runtimeRoot + @"python\open.py"))) + "\n"
-        macroContent += "        ) else (\n"
-        macroContent += "            messageBox \"MaxPkg Package Manager is not installed. Install it again from maxpkg.dev.\" title: \"MaxPkg\"\n"
-        macroContent += "        )\n"
+        macroContent += pythonEntryLines "open.py" "        " "messageBox \"MaxPkg Package Manager is not installed. Install it again from maxpkg.dev.\" title: \"MaxPkg\""
         macroContent += "    )\n"
         macroContent += ")\n"
         forceDeleteFile (macroRoot + "MaxPkg-MaxPkg_Qt_Manager.mcr")
@@ -167,12 +169,24 @@
         return (getFiles (folderPath + "*")).count == 0 and (getDirectories (folderPath + "*")).count == 0
     )
 
-    -- Removes the previous MaxScript/.NET Runtime (MaxPkg-Runtime-Manager): stops it, deletes its startup script,
-    -- MacroScripts and program files. Its settings.ini moves to the new data folder (imported on first start) and
-    -- packages installed under data\packages\ stay where they are, because their own scripts point there.
-    fn removeLegacyRuntime temporaryRoot targetRoot sourceRoot = (
+    -- True for a folder inside this 3ds Max's own profile (...\2024 - 64bit\ENU\). A folder set up by hand may be shared
+    -- with another 3ds Max version, which can still be running the previous Runtime from it.
+    fn isOwnFolder folderPath = (
+        local profileRoot = ""
+        try (
+            profileRoot = ensureSlash (getDir #maxData)
+        ) catch (
+            return false
+        )
+        if (profileRoot == "") do return false
+        return (findString (toLower (ensureSlash folderPath)) (toLower profileRoot)) == 1
+    )
+
+    -- Stops the previous MaxScript/.NET Runtime in this session and frees the MaxPkg global for the Package Manager.
+    -- Its files stay until the Package Manager has started. The Qt Package Manager defines MaxPkg too (isPackageManager);
+    -- stop.py handles that one.
+    fn stopLegacyRuntime = (
         global MaxPkg
-        -- The Qt Package Manager defines MaxPkg too (isPackageManager); stop.py handles that one.
         if (MaxPkg != undefined and not (isProperty MaxPkg #isPackageManager)) do (
             if (isProperty MaxPkg #shutdown) do (
                 try (
@@ -183,34 +197,100 @@
             )
             MaxPkg = undefined
         )
+    )
+
+    -- Its settings.ini is copied before the first start, which reads it.
+    fn keepLegacySettings legacyRoot targetRoot = (
+        local legacySettings = legacyRoot + "settings.ini"
+        local targetSettings = targetRoot + "settings.ini"
+        if ((doesFileExist legacySettings) and not (doesFileExist targetSettings)) do (
+            if (not (copyFile legacySettings targetSettings)) do format "MaxPkg could not copy the previous settings: %\n" legacySettings
+        )
+    )
+
+    fn isPackageManagerRunning = (
+        global MaxPkg
+        return MaxPkg != undefined and (isProperty MaxPkg #isPackageManager) and MaxPkg.isStarted()
+    )
+
+    -- The Package Manager did not start: takes back what stops the previous Runtime from starting (version.ini and the
+    -- startup script) and starts that Runtime again, so the user is not left without one.
+    fn restoreLegacyRuntime legacyRoot targetRoot shimPath = (
+        global MaxPkg
+        local stopEntry = targetRoot + @"python\stop.py"
+        try (
+            if (doesFileExist stopEntry) do python.Execute (pythonRunCommand stopEntry)
+        ) catch (
+            format "MaxPkg could not stop the Package Manager: %\n" (getCurrentException())
+        )
+        if (MaxPkg != undefined and (isProperty MaxPkg #isPackageManager)) do MaxPkg = undefined
+        forceDeleteFile shimPath
+        forceDeleteFile (targetRoot + "version.ini")
+        try (
+            fileIn (legacyRoot + "startup.ms")
+        ) catch (
+            format "MaxPkg could not start the previous Runtime again: %\n" (getCurrentException())
+        )
+    )
+
+    -- A kept startup.ms older than 1.2.1 does not check for the Package Manager: started next to it, that Runtime would
+    -- shut it down. The original moves to startup-1x.ms and a small startup.ms decides, the same way 1.2.1 does.
+    fn guardLegacyStartup legacyRoot = (
+        local startupFile = legacyRoot + "startup.ms"
+        if (not (doesFileExist startupFile)) do return false
+        local fileClass = dotNetClass "System.IO.File"
+        if ((findString (fileClass.ReadAllText startupFile) "MaxPkg-Runtime-Manager-Qt") != undefined) do return true
+        local originalFile = legacyRoot + "startup-1x.ms"
+        forceDeleteFile originalFile
+        if (not (renameFile startupFile originalFile)) do return false
+        local guardContent = ""
+        guardContent += "-- Written by the MaxPkg Package Manager installer: this Runtime does not start next to it.\n"
+        guardContent += "(\n"
+        guardContent += "    local managerFolder = (getDir #temp) + @\"\\MaxPkg-Runtime-Manager-Qt\\\"\n"
+        guardContent += "    local isManagerInstalled = (maxVersion())[1] >= 24000 and doesFileExist (managerFolder + @\"python\\startup.py\") and doesFileExist (managerFolder + \"version.ini\")\n"
+        guardContent += "    if (not isManagerInstalled) do fileIn " + (maxScriptPathLiteral originalFile) + "\n"
+        guardContent += ")\n"
+        return writeTextFile startupFile guardContent
+    )
+
+    -- Deletes the previous Runtime (MaxPkg-Runtime-Manager) once the Package Manager runs: its startup script,
+    -- MacroScripts and program files. Packages under data\packages\ stay where they are, because their own scripts point
+    -- there. A failure here is only logged: the Package Manager already works, and the previous Runtime does not start
+    -- next to it (its startup.ms checks for the Package Manager's folder).
+    fn removeLegacyFiles legacyRoot temporaryRoot sourceRoot = (
+        local startupRoot = ensureSlash (getDir #userStartupScripts)
         local userMacrosRoot = ensureSlash (getDir #userMacros)
+        -- In a shared folder, another 3ds Max version may still use the startup script and macros. They load the program
+        -- files by a fixed path, so those stay as well, or that 3ds Max would get an error at every start.
+        if (not ((isOwnFolder startupRoot) and (isOwnFolder userMacrosRoot) and (isOwnFolder temporaryRoot))) do (
+            format "MaxPkg kept the previous Runtime: its folders may be shared with another 3ds Max version.\n"
+            if (not (guardLegacyStartup legacyRoot)) do format "MaxPkg could not guard the previous Runtime's startup script.\n"
+            return false
+        )
+        -- The startup script goes first: left without its program files, it would fail at every start.
         local legacyFiles = #(
-            (ensureSlash (getDir #userStartupScripts)) + "maxpkg-runtime-startup.ms",
+            startupRoot + "maxpkg-runtime-startup.ms",
             userMacrosRoot + "maxpkg-runtime-manager.mcr",
             userMacrosRoot + "MaxPkg-MaxPkg_Manager.mcr"
         )
         for legacyFile in legacyFiles do (
-            if (not (forceDeleteFile legacyFile)) do throw ("Could not remove the previous Runtime file:\n" + legacyFile)
+            if (not (forceDeleteFile legacyFile)) do (
+                format "MaxPkg could not remove the previous Runtime file: %\n" legacyFile
+                return false
+            )
         )
-        local legacyRoot = temporaryRoot + @"MaxPkg-Runtime-Manager\"
         if (not (doesDirectoryExist legacyRoot)) do return true
-        if ((findString (toLower sourceRoot) (toLower legacyRoot)) == 1) do return true  -- never delete the running installer
-        local legacySettings = legacyRoot + "settings.ini"
-        local targetSettings = targetRoot + "settings.ini"
-        if ((doesFileExist legacySettings) and not (doesFileExist targetSettings)) do (
-            makeDir targetRoot all: true
-            if (not (copyFile legacySettings targetSettings)) do throw ("Could not keep the previous settings:\n" + legacySettings)
-        )
+        if ((findString (toLower sourceRoot) (toLower legacyRoot)) == 1) do return false  -- never delete the running installer
         local packagesRoot = legacyRoot + @"data\packages\"
         local keepPackages = (doesDirectoryExist packagesRoot) and (getDirectories (packagesRoot + "*")).count > 0
         for legacyFolder in (getDirectories (legacyRoot + "*")) do (
             local folderName = toLower (pathConfig.stripPathToLeaf (substring legacyFolder 1 (legacyFolder.count - 1)))
             if (not (keepPackages and folderName == "data")) do (
-                if (not (forceDeleteFolder legacyFolder)) do throw ("Could not remove the previous Runtime folder:\n" + legacyFolder)
+                if (not (forceDeleteFolder legacyFolder)) do format "MaxPkg could not remove the previous Runtime folder: %\n" legacyFolder
             )
         )
         for legacyFile in (getFiles (legacyRoot + "*")) do (
-            if (not (forceDeleteFile legacyFile)) do throw ("Could not remove the previous Runtime file:\n" + legacyFile)
+            if (not (forceDeleteFile legacyFile)) do format "MaxPkg could not remove the previous Runtime file: %\n" legacyFile
         )
         if (isFolderEmpty legacyRoot) do forceDeleteFolder legacyRoot
         format "MaxPkg removed the previous Runtime from %\n" legacyRoot
@@ -233,7 +313,7 @@
         try (
             if ((toLower sourceRoot) == (toLower targetRoot)) do throw "The Package Manager cannot be installed over its source folder."
             if (temporaryRoot == "") do throw "The 3ds Max temporary folder is unavailable."
-            removeLegacyRuntime temporaryRoot targetRoot sourceRoot
+            local legacyRoot = temporaryRoot + @"MaxPkg-Runtime-Manager\"
             local stopEntry = targetRoot + @"python\stop.py"
             if (doesFileExist stopEntry) do (
                 try (
@@ -249,12 +329,31 @@
             copyTree (sourceRoot + @"python\") (targetRoot + @"python\")
             copyTree (sourceRoot + @"assets\") (targetRoot + @"assets\")
             replaceFile (sourceRoot + "StartMaxPkg.ms") (targetRoot + "StartMaxPkg.ms")
-            replaceFile (sourceRoot + "version.ini") (targetRoot + "version.ini")
             replaceFile (sourceRoot + "uninstall.ms") (targetRoot + "uninstall.ms")
-            local shimPath = (ensureSlash (getDir #userStartupScripts)) + "maxpkg-runtime-qt-startup.ms"
-            if (not (writeStartupShim shimPath targetRoot)) do throw "Could not create the startup script."
             if (not (writeManagerMacro targetRoot)) do throw "Could not create the MaxPkg Manager (Qt) MacroScript."
-            runPython (targetRoot + @"python\welcome.py")
+            -- These two come last: from here on the previous Runtime no longer starts next to the Package Manager.
+            -- Until here a failure leaves that Runtime working and untouched.
+            local shimPath = (ensureSlash (getDir #userStartupScripts)) + "maxpkg-runtime-qt-startup.ms"
+            replaceFile (sourceRoot + "version.ini") (targetRoot + "version.ini")
+            if (not (writeStartupShim shimPath)) do throw "Could not create the startup script."
+            local hasLegacyRuntime = doesFileExist (legacyRoot + "startup.ms")
+            stopLegacyRuntime()
+            keepLegacySettings legacyRoot targetRoot
+            local startError = ""
+            try (
+                runPython (targetRoot + @"python\welcome.py")
+            ) catch (
+                startError = getCurrentException()
+            )
+            if (not (isPackageManagerRunning())) do (
+                if (hasLegacyRuntime) do restoreLegacyRuntime legacyRoot targetRoot shimPath
+                throw ("The Package Manager did not start. " + startError)
+            )
+            try (
+                removeLegacyFiles legacyRoot temporaryRoot sourceRoot
+            ) catch (
+                format "MaxPkg could not remove the previous Runtime: %\n" (getCurrentException())
+            )
             format "MaxPkg Package Manager % was installed to %\n" runtimeVersion targetRoot
             return true
         ) catch (
