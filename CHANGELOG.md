@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.9
+
+- Fixed: Installing over the previous MaxPkg Runtime removes it only after the Package Manager has started; if it does not start, the previous Runtime keeps working.
+- Fixed: When several 3ds Max versions share a scripts or macros folder, installing no longer removes the previous Runtime that an older 3ds Max still uses.
+- Fixed: The Package Manager's startup script and action do nothing on 3ds Max older than 2022, and each 3ds Max version uses its own copy.
+- Changed: The Package Manager updates itself only from the releases of its own repository.
+
 ## 2.0.8
 
 - Added: The Package Manager updates itself from its GitHub releases: the download is checked against the published SHA-256, and if the new version does not start, the previous one comes back. Versions older than this one still need a manual install once.
