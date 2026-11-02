@@ -561,14 +561,18 @@ class ScreenshotPreview(QtWidgets.QWidget):
     when it opens. The backdrop is the window behind it, blurred and tinted with the theme's overlay colour."""
 
     def __init__(self, window, shots, index):
+        # The window is grabbed before this widget exists: grab() first delivers pending resize events to the
+        # window's children, and on some systems (3ds Max 2025) this half-built lightbox got one and failed.
+        backdrop = blurred(window.grab(window.content_rect()))
         QtWidgets.QWidget.__init__(self, window)
+        self._built = False  # _paint waits until every part exists
         self.setObjectName("Lightbox")
         self.manager_window = window
         self.themes = window.themes
         self.shots = shots
         self.index = index
         self._shade = 0.0  # backdrop strength 0..1 (it paints itself so a drag can fade it)
-        self._backdrop = blurred(window.grab(window.content_rect()))
+        self._backdrop = backdrop
         images = window.images
         images.retry([shot.url for shot in shots])  # one that failed before (offline, timeout) gets another try
         self.image = SlideView(len(shots), lambda position: images.get(shots[position].url), window.themes,
@@ -614,6 +618,7 @@ class ScreenshotPreview(QtWidgets.QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         # 3ds Max accelerators swallow Esc and the arrow keys before Qt sees them.
         disable_max_accelerators(self)
+        self._built = True
         self.setGeometry(window.content_rect())
         self.show()
         self.raise_()
@@ -684,7 +689,7 @@ class ScreenshotPreview(QtWidgets.QWidget):
             self._step(1)
 
     def _paint(self):
-        if not is_valid(self):
+        if not is_valid(self) or not getattr(self, "_built", False):
             return
         shot = self.shots[self.index]
         # Full width so slides cross the whole lightbox; images are fitted 70 px in from each side.

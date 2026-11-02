@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.5
+
+- Fixed: On some computers (seen in 3ds Max 2025) the screenshot viewer did not open.
+
 ## 2.0.4
 
 - Added: View Logs at the bottom left opens the log of any day, with info, success, warning and error records in their colours, a level filter, search and live updates.
