@@ -56,7 +56,7 @@ reorder it; right-click for Run, Details, Update, Move, Hide and toolbar options
 ## Status
 
 Preview 2.0.0. Done: Manager (Discover, Installed, Updates, Details, Settings), toolbar, themes, update
-check, install/update/uninstall logic. Not done yet: onboarding window, Runtime self-update, removing the
+check, install/update/uninstall logic, self-update (see below). Not done yet: onboarding window, removing the
 Runtime from Settings, the MaxScript `MaxPkg` facade for package installers and the website, MZP package,
 tests on PySide2. Install/uninstall code is ported from the MaxScript Runtime but has not been exercised
 on a real profile yet.

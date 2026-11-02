@@ -9,6 +9,7 @@ import os
 
 from . import qt_compat
 from .domain.api import split_references
+from .domain import self_update as self_update_rules
 from .domain.ini import IniDocument
 from .qt_compat import QtCore, QtGui, QtWidgets, is_valid, screen_at
 from .services import log, max_api
@@ -47,9 +48,10 @@ class Controller:
         self._screen_toasts = []  # bottom-right toasts while the Manager is closed
 
     # ----------------------------------------------------------------- lifecycle
-    def start(self, open_manager=True, welcome=False, from_startup=False):
+    def start(self, open_manager=True, welcome=False, from_startup=False, updated_from=""):
         """open_manager: launcher/macro; welcome: right after installation; from_startup: 3ds Max start
-        (honours 'Start Runtime with 3ds Max' and 'Open Manager on startup')."""
+        (honours 'Start Runtime with 3ds Max' and 'Open Manager on startup'); updated_from: the version this start
+        replaced after a self-update (the user is told)."""
         if qt_compat.application() is None:
             raise RuntimeError("No QApplication: run the MaxPkg Runtime inside 3ds Max")
         version, channel = read_version(self.root)
@@ -79,7 +81,16 @@ class Controller:
         self.running = True
         if settings.auto_check_packages and self.runtime.automatic_check_due():
             self._later(AUTO_CHECK_DELAY_MS, lambda: self.runtime.check_updates(manual=False))
+        updater = self.runtime.self_update
+        updater.manager_is_open = self._manager_showing
+        if updater.check_due() and not updated_from:
+            self._later(AUTO_CHECK_DELAY_MS + 3000, lambda: updater.check(manual=False))
+        # The previous version stays as <name>.old until the new one has run for a while.
+        self._later(30000, lambda: self_update_rules.cleanup_backups(self.root))
         self._later(60000, self.images.prune_disk)
+        if updated_from:
+            log.success("self-update", "Updated from {} to {}".format(updated_from, version))
+            self.runtime.say("Package Manager updated to {}.".format(version), "success")
         if open_manager or settings.open_manager_on_startup:
             self.open_manager("")
         if welcome:

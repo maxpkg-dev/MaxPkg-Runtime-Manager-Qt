@@ -38,6 +38,7 @@ _FIELDS = (
     ("auto_check_packages", "Updates", "AutoCheckPackages", "bool", True, None),
     ("auto_check_runtime", "Updates", "AutoCheckRuntime", "bool", True, None),
     ("download_automatically", "Updates", "DownloadAutomatically", "bool", False, None),
+    ("last_runtime_check_utc", "Updates", "LastRuntimeCheckUtc", "str", "", None),
     ("last_package_check_utc", "Updates", "LastPackageCheckUtc", "str", "", None),
     ("package_update_cache", "Updates", "PackageCache", "list", (), None),
     ("manager_last_selection", "Manager", "LastSelection", "str", "", None),

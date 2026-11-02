@@ -18,6 +18,7 @@ from ..domain.packages import (DIVIDER, Package, compatible, incompatibility, is
 from ..domain.settings import load_or_migrate
 from ..qt_compat import QtCore, Signal
 from . import log, max_api, network
+from .self_update import SelfUpdater
 
 LEGACY_FOLDER = "MaxPkg-Runtime-Manager"
 DATA_FOLDER = "MaxPkg-Runtime-Manager-Qt"
@@ -115,6 +116,7 @@ class Runtime(QtCore.QObject):
         self.connection = "unknown"   # online / offline
         self._catalog_ticket = 0
         self._stopped = False
+        self.self_update = SelfUpdater(self)  # the Package Manager's own updates
 
     # ----------------------------------------------------------------- lifecycle
     def start(self):
@@ -124,6 +126,7 @@ class Runtime(QtCore.QObject):
 
     def stop(self):
         self._stopped = True
+        self.self_update.stop()
         if self.install_queue:
             log.warning("installer", "Stopped with {} queued installs: {}".format(len(self.install_queue),
                                                                                  ", ".join(self.install_queue)))

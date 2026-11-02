@@ -256,6 +256,13 @@ class SettingsPanel(QtWidgets.QWidget):
         self.frequency.currentIndexChanged.connect(
             lambda _index: self._set("update_frequency_hours", self.frequency.value(), "updates"))
         updates.addWidget(self.frequency)
+        updates.addWidget(label("Package Manager", "FieldLabel"))
+        self.runtime_status = label("", "Muted", wrap=True)
+        updates.addWidget(self.runtime_status)
+        self.runtime_button = Button("Check for updates", "refresh-cw", "default", themes)
+        self.runtime_button.clicked.connect(self._runtime_button_clicked)
+        updates.addLayout(hbox(self.runtime_button, None))
+        self.runtime.self_update.changed.connect(self._refresh_runtime_update)
         updates.addStretch(1)
 
         self._build_toolbar_page()
@@ -528,8 +535,46 @@ class SettingsPanel(QtWidgets.QWidget):
         if self.isVisible():
             self.refresh()
 
+    def _runtime_button_clicked(self):
+        updater = self.runtime.self_update
+        if updater.available is not None and updater.can_install():
+            updater.install()
+        else:
+            updater.check(manual=True)
+
+    def _refresh_runtime_update(self):
+        """Settings > Updates: the running version, what the last check found and the matching button."""
+        updater = self.runtime.self_update
+        update = updater.available
+        working = updater.state != "idle"
+        if updater.state == "checking":
+            text = "Checking for a new version..."
+        elif updater.state == "downloading":
+            text = "Downloading Package Manager {}...".format(update.version if update else "")
+        elif updater.state == "installing":
+            text = "Restarting the Package Manager..."
+        elif updater.error:
+            text = updater.error
+        elif update is not None and updater.can_install():
+            text = "Version {} is available. You have {}.".format(update.version, self.runtime.version)
+        elif update is not None:
+            text = "Version {} is available. This copy runs from a source folder: update it with git.".format(
+                update.version)
+        elif updater.checked_once:
+            text = "Package Manager {} is the latest version.".format(self.runtime.version)
+        else:
+            text = "Package Manager {} ({}).".format(self.runtime.version, self.runtime.channel)
+        self.runtime_status.setText(text)
+        offer = update is not None and updater.can_install() and not updater.error
+        self.runtime_button.setText("Update to {}".format(update.version) if offer else "Check for updates")
+        self.runtime_button.setProperty("variant", "primary" if offer else "default")
+        self.runtime_button.style().unpolish(self.runtime_button)
+        self.runtime_button.style().polish(self.runtime_button)
+        self.runtime_button.setEnabled(not working)
+
     def refresh(self):
         settings = self.runtime.settings
+        self._refresh_runtime_update()
         self._saving = True
         try:
             for attribute, switch in self._switches.items():
