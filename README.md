@@ -1,79 +1,76 @@
 # MaxPkg Package Manager
 
-Package manager for Autodesk 3ds Max, rebuilt on **Python + Qt**: find scripts in the
-[maxpkg.dev](https://maxpkg.dev) catalog, install, run, update and remove them, and keep your favourite
-tools on the MaxPkg toolbar. Same Manager you know — without the embedded web browser.
+## All your 3ds Max scripts in one place
+
+You know the drill: you find a cool script, download some archive, wonder where it goes, copy it somewhere,
+and a month later you have no idea what is installed or which version it is.
+
+MaxPkg fixes that. Think of it as an app store for 3ds Max. Open it, find a script, click `Install`, use it.
+That's it.
 
 ![Discover](docs/screenshots/qt-discover-1300.png)
 
-## Why it was rebuilt
+## Install it
 
-The previous MaxScript version renders its UI in a dotNet `WebBrowser` and runs parts of its update logic in
-background threads, which can end in *"MAXScript Garbage Collection Error"* and freezes while the
-catalog loads. This version uses the Qt and Python that ship with 3ds Max:
+1. Download **[MaxPkg-Runtime-Manager-Qt.mzp](https://github.com/maxpkg-dev/MaxPkg-Runtime-Manager-Qt/releases/latest/download/MaxPkg-Runtime-Manager-Qt.mzp)**.
+2. Drag the file into a 3ds Max viewport.
 
-- no WebBrowser, no dotNet; all network work in background threads, MaxScript only on the main thread;
-- the window stays responsive while the catalog, details and images load;
-- a native 3ds Max toolbar that docks to any edge or floats.
+Done. Everything else happens by itself, and a welcome window shows you around.
 
-## Run (preview)
+Drag and drop didn't work? In 3ds Max go to `Scripting > Run Script...` and pick the same file.
 
-In 3ds Max: *Scripting → Run Script…* → `StartMaxPkg.ms`, or in the Listener:
+Already found a script on [maxpkg.dev](https://maxpkg.dev)? Even easier: click `Install` on its page and drag the
+block from the website into a viewport. You get the script, and MaxPkg too if you don't have it yet.
 
-```maxscript
-fileIn @"<repository folder>\StartMaxPkg.ms"
-```
+**You need** 3ds Max 2022 or newer, and internet when you look for, install or update scripts. Scripts you already
+installed keep working offline. On an older 3ds Max, use the
+[previous MaxPkg](https://github.com/maxpkg-dev/MaxPkg-Runtime-Manager).
 
-Running it again restarts the Package Manager cleanly. The preview runs beside the previous MaxScript version and imports
-its settings on first start (`settings.ini`, same format).
+## What you can do
 
-## The Manager
+**Find scripts.** Look through the catalog by category, collection or just by typing a name. Every script has its
+description, screenshots, videos and a list of what changed in each version.
 
-- **Discover** — catalog with collections, categories (side panel on wide windows, dropdown on narrow
-  ones), sorting, 24 packages per page.
-- **Installed / Updates** — compact or full cards, filters, sorting, drag the grip to reorder the toolbar.
-- **Details** — description, screenshots (click for full window), changelog, package information, links.
-- **Settings** — separate floating window: General, Updates, Toolbar (live preview), Themes, Developer,
-  About.
-- Own rounded window: drag the header, double-click to maximise, `–` collapses it to a small bar
-  (click its name to open again). Place, size and state are remembered.
-- Keys: `Ctrl+F` search, `Esc` back/clear, `F5` refresh, `Ctrl+1/2/3` tabs, `Ctrl+,` Settings.
+**Install in one click.** No folders, no copying files. The script appears on your toolbar and it's ready to go.
 
-## The toolbar
+**Keep your favourites close.** The MaxPkg toolbar holds your scripts. Dock it to any side of the screen or let it
+float, choose big or small buttons, drag them around, hide the ones you don't need.
 
-Top, bottom, left, right or floating; icon size, spacing, button style and second line (version or
-developer) are set in Settings → Toolbar. Buttons that do not fit go into the `»` menu. Drag a button to
-reorder it; right-click for Run, Details, Update, Move, Hide and toolbar options.
+**Stay up to date.** `Check Updates` shows what has a new version, and one click updates it, or all of them at once.
+You can also let it do this on its own. MaxPkg updates itself too, so there is nothing to download again.
 
-## Compatibility
+**Clean up.** Don't need a script any more? Click `Uninstall` and it's gone, buttons included. Your scenes stay as they are.
 
-| 3ds Max | Python | Qt | Status |
-|---|---|---|---|
-| 2027 | 3.13 | PySide6 6.8 | tested |
-| 2025–2026 | 3.11 | PySide6 | targeted, not tested yet |
-| 2022–2024 | 3.7–3.10 | PySide2 | targeted, not tested yet |
+![Installed](docs/screenshots/qt-installed-1000.png)
 
-## Status
+## Where to find it
 
-Preview 2.0.0. Done: Manager (Discover, Installed, Updates, Details, Settings), toolbar, themes, update
-check, install/update/uninstall logic, self-update (see below). Not done yet: onboarding window, removing the
-Runtime from Settings, the MaxScript `MaxPkg` facade for package installers and the website, MZP package,
-tests on PySide2. Install/uninstall code is ported from the MaxScript Runtime but has not been exercised
-on a real profile yet.
+Click the MaxPkg button on the toolbar. Toolbar hidden? Press `X` in 3ds Max and type `MaxPkg Manager`.
 
-## Repository
+## Is it safe?
 
-| Path | |
-|---|---|
-| `StartMaxPkg.ms`, `python/bootstrap.py` | launcher and clean restart |
-| `python/maxpkg_runtime/` | `domain/` (pure), `services/`, `ui/` |
-| `assets/` | Lucide icons, themes, `manager.qss` |
-| `tests/` | unit tests and in-Max scripts |
-| `docs/` | architecture, UI, original spec, screenshots |
-| `.agents/`, `.claude/CLAUDE.md` | rules for contributors and agents, pitfalls (`.agents/pitfalls.md`) |
+Scripts on maxpkg.dev are reviewed before they are published. When a version comes with a published fingerprint,
+MaxPkg compares it with the file it downloaded. If they don't match, the file gets deleted and nothing is installed.
+
+## Something went wrong?
+
+1. Click `View Logs` at the bottom left of the window to see what happened.
+2. Restart 3ds Max.
+3. Still stuck? [Tell us about it](https://github.com/maxpkg-dev/MaxPkg-Runtime-Manager-Qt/issues). Mention your
+   3ds Max version, the MaxPkg version from the bottom of the window, and what you were doing.
+
+## Want to remove MaxPkg?
+
+Open `Settings > Uninstall`. No hard feelings.
+
+## Links
+
+- Browse scripts: [maxpkg.dev](https://maxpkg.dev)
+- Made by [3DGROUND](https://3dground.net)
 
 ## License
 
-MaxPkg Package Manager is provided only for use with the official MaxPkg service. Unauthorized copying,
-modification, redistribution, reverse engineering, or use with third-party installer endpoints is
-prohibited. Copyright (c) 2026 Lukianenko Vasyl. Developed by [3DGROUND](https://3dground.net).
+MaxPkg Package Manager is provided only for use with the official MaxPkg service. Unauthorized copying, modification,
+redistribution, reverse engineering, or use with third-party installer endpoints is prohibited.
+
+Copyright (c) 2026 Lukianenko Vasyl.
