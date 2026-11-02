@@ -210,6 +210,16 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(api.split_references("aa-1,bb-2\ncc-3"), ["aa-1", "bb-2", "cc-3"])
         self.assertEqual(api.split_references(""), [])
 
+    def test_published_sha256(self):
+        sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        resolved = api.parse_details("[meta]\nSuccess=true\n[package]\nGuid=g1\nName=Prune Scene\nVersion=4.2.1\n"
+                                     "DownloadUrl=https://x/d\nSha256=" + sha + "\nFileSize=378880\n", 2027)
+        self.assertEqual(resolved.download_sha256, sha)
+        updates = api.parse_updates("[meta]\nCount=2\n[g1]\nVersion=4.2.1\nDownloadUrl=https://x/d\nSha256=" + sha +
+                                    "\n[g2]\nVersion=1.0.1\nDownloadUrl=https://x/e\nSha256=\n", 2027)
+        self.assertEqual(updates["g1"].download_sha256, sha)
+        self.assertEqual(updates["g2"].download_sha256, "")
+
     def test_catalog_filters_incompatible(self):
         page = api.parse_catalog(self.CATALOG, 2027)
         self.assertEqual([package.guid for package in page.packages], ["g1"])

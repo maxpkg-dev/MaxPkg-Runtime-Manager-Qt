@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.6
+
+- Added: A downloaded package is checked against the SHA-256 published by maxpkg.dev before it is installed; a file that does not match is deleted and not installed.
+- Added: After installing several packages at once, such as a collection, a summary names the packages that were not installed.
+
 ## 2.0.5
 
 - Fixed: On some computers (seen in 3ds Max 2025) the screenshot viewer did not open.

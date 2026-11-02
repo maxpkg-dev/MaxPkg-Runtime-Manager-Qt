@@ -62,6 +62,7 @@ class Package:
         self.icon_url = ""       # remote icon
         self.cover_image_url = ""
         self.download_url = ""
+        self.download_sha256 = ""  # SHA-256 the service published for download_url ("" = none yet)
         self.rating = 0.0
         self.review_count = 0
         self.download_count = 0

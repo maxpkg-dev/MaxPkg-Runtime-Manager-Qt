@@ -11,7 +11,7 @@ import shutil
 import stat
 import uuid
 
-from ..domain import api
+from ..domain import api, integrity
 from ..domain.packages import (DIVIDER, Package, compatible, incompatibility, is_divider, is_newer,
                                merge_visible_order, normalized_order, ordered_for_toolbar, read_mzp_manifest, scan,
                                supported_versions, toolbar_entries, with_brand_divider)
@@ -109,6 +109,8 @@ class Runtime(QtCore.QObject):
         self.details_errors = {}
         self.operation = ""           # '' when no critical operation runs
         self.install_queue = []       # references MaxScript asked to install while an operation ran
+        self._batch = None            # results of those installs until the queue is empty (collection summary)
+        self.last_install = ("", False, "")  # (name, ok, reason) of the last install, for the summary
         self.checking_updates = False
         self.connection = "unknown"   # online / offline
         self._catalog_ticket = 0
@@ -454,6 +456,7 @@ class Runtime(QtCore.QObject):
                 if found is not None and is_newer(found.version, package.version):
                     cache.append(package.guid + "@" + found.version)
                     package.download_url = found.download_url
+                    package.download_sha256 = found.download_sha256  # same response as the link
             self.settings.package_update_cache = cache
             self.settings.last_package_check_utc = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
             self.save_settings("updates")
@@ -508,19 +511,68 @@ class Runtime(QtCore.QObject):
         if reference.lower() in (queued.lower() for queued in self.install_queue):
             log.info("installer", "Already waiting to be installed: " + reference)
             return True
+        if self._batch is None:
+            self._batch = []
         if self.operation or self.install_queue:
             self.install_queue.append(reference)
             log.info("installer", "Queued {} ({} waiting)".format(reference, len(self.install_queue)))
             return True
         log.info("installer", "Install requested: " + reference)
-        return self.install(reference)
+        return self.install(reference, on_done=self._batch_done)
 
     def _next_queued(self):
         if self._stopped or self.operation or not self.install_queue:
             return  # an operation started meanwhile (Update All): its end calls this again
         reference = self.install_queue.pop(0)
         log.info("installer", "Installing from the queue: {} ({} left)".format(reference, len(self.install_queue)))
-        self.install(reference)
+        self.install(reference, on_done=self._batch_done)
+
+    def _batch_done(self, _ok):
+        """One requested install ended. When nothing waits any more and the batch had several packages (a
+        collection), one summary names the packages that were not installed; each one also had its own message."""
+        if self._batch is None:
+            return
+        self._batch.append(self.last_install)
+        if self.install_queue:
+            return
+        results, self._batch = self._batch, None
+        if len(results) < 2:
+            return
+        missing = [name + (" (" + reason + ")" if reason else "") for name, ok, reason in results if not ok]
+        installed = len(results) - len(missing)
+        if not missing:
+            log.success("installer", "All {} requested packages were installed".format(len(results)))
+            self.say("All {} packages were installed.".format(len(results)), "success")
+            return
+        log.warning("installer", "{} of {} requested packages were installed; not installed: {}".format(
+            installed, len(results), ", ".join(missing)))
+        self.say("{} of {} packages were installed.\nNot installed: {}.".format(installed, len(results),
+                                                                              ", ".join(missing)), "warning")
+
+    def _verify_download(self, file_path, published):
+        """Check a downloaded package against the SHA-256 that the API response giving its link published, before
+        anything opens the archive. `published` is (sha256, name, version), or None for a link from MaxScript that
+        came without an API response. Returns '' when the file may be installed, else the message for the user;
+        the hashes go only to the log."""
+        expected, name, version = published if published is not None else ("", "", "")
+        title = " ".join(part for part in (name, version) if part) or "the package"
+        result, actual = integrity.verify_file(file_path, expected)
+        if result == integrity.MATCH:
+            log.info("installer", "SHA-256 verified for {}: {}".format(title, actual))
+            return ""
+        if result == integrity.UNPUBLISHED:  # versions imported before the service stored hashes
+            log.warning("installer", "{} has no published SHA-256{}; installing without verification (file {})".format(
+                title, "" if published is not None else " (direct link)", actual))
+            return ""
+        if result == integrity.UNREADABLE:
+            log.error("installer", "SHA-256 of {} could not be computed: the downloaded file could not be read".format(
+                title))
+            return ("Package verification failed: {}.\nThe downloaded file could not be checked and was not "
+                    "installed.".format(title))
+        log.error("installer", "SHA-256 mismatch for {}: expected {}, got {}; the file was deleted and not "
+                               "installed".format(title, expected.strip(), actual))
+        return ("Package verification failed: {}.\nThe downloaded file does not match the published version and was "
+                "not installed.".format(title))
 
     def install(self, reference, on_done=None, updating=False, previous=None):
         """Resolve (API) and download asynchronously, then fileIn the MZP on the main thread and verify.
@@ -535,23 +587,26 @@ class Runtime(QtCore.QObject):
         is_location = reference.lower().startswith(("http://", "https://")) or os.path.isfile(reference)
         # Messages name the package, never a URL or file path.
         fallback_name = previous.display_name if previous is not None else ("The package" if is_location else reference)
+        self.last_install = (fallback_name, False, "")
 
         def failed(error):
             self._finish()
             message = error.message if isinstance(error, api.ApiError) else network.describe(error)
             log.error("installer", "{} could not be {}: {}".format(fallback_name, "updated" if updating else "installed",
                                                                    message))
+            self.last_install = (fallback_name, False, "")
             self.say("{} could not be {}.\n{}".format(fallback_name, "updated" if updating else "installed", message),
                      "error", retry)
             if on_done:
                 on_done(False)
 
-        def fetch(source, guid):
+        def fetch(source, guid, published=None):
+            """`published`: (sha256, name, version) from the API response that gave `source`."""
             if not source.lower().startswith(("http://", "https://")):
-                done((source, guid, False), None)
+                done((source, guid, False, None), None)  # a file the user chose: nothing was downloaded
                 return
             target = os.path.join(self.paths.downloads, "maxpkg-download-" + uuid.uuid4().hex + ".mzp")
-            self.network.download(source, target, lambda path, error: done((path, guid, True), error))
+            self.network.download(source, target, lambda path, error: done((path, guid, True, published), error))
 
         def resolved(package, error):
             if error is not None:
@@ -559,13 +614,26 @@ class Runtime(QtCore.QObject):
             elif not package.download_url:
                 failed(api.ApiError("ARTIFACT_NOT_FOUND", "The MaxPkg service did not provide a download for this package."))
             else:
-                fetch(package.download_url, package.guid)
+                fetch(package.download_url, package.guid,
+                      (package.download_sha256, package.display_name, package.version))
 
         def done(result, error):
             if error is not None:
                 failed(error)
                 return
-            path, guid, temporary = result
+            path, guid, temporary, published = result
+            if temporary:
+                # Before the archive is opened (manifest, fileIn): the file installed is the file that was checked.
+                problem = self._verify_download(path, published)
+                if problem:
+                    _remove_file(path)
+                    self._finish()
+                    self.last_install = ((published[1] if published else "") or fallback_name, False,
+                                         "verification failed")
+                    self.say(problem, "error", retry)
+                    if on_done:
+                        on_done(False)
+                    return
             bundled = read_mzp_manifest(path)
             problem = incompatibility(bundled, max_year) if bundled is not None else ""
             if problem:  # a file chosen by hand or a direct link: the catalog never offers it for this 3ds Max
@@ -575,6 +643,7 @@ class Runtime(QtCore.QObject):
                 log.warning("installer", "Not installed on 3ds Max {}: {} supports {}".format(
                     max_year, bundled.guid or "package", supported_versions(bundled)))
                 name = bundled.display_name if bundled.name else fallback_name
+                self.last_install = (name, False, "")
                 self.say("{} was not {}.\n{}".format(name, "updated" if updating else "installed", problem), "error")
                 if on_done:
                     on_done(False)
@@ -586,6 +655,7 @@ class Runtime(QtCore.QObject):
             self._finish()
             package = self.package(guid) if guid else None
             label = package.display_name if package else fallback_name
+            self.last_install = (label, ok, "")
             if ok:
                 run = [("Run", "play", lambda: self.run(package.guid)),
                        ("Details", "info", lambda: self.details_requested.emit(package.guid))] if package else []
@@ -611,7 +681,11 @@ class Runtime(QtCore.QObject):
                 on_done(ok)
 
         if is_location:
-            fetch(reference, previous.guid if previous is not None else "")
+            # An update link comes with the hash of the same update check; another link has no API response.
+            published = None
+            if previous is not None and reference == previous.download_url:
+                published = (previous.download_sha256, previous.display_name, previous.latest_version)
+            fetch(reference, previous.guid if previous is not None else "", published)
         else:
             self._post(api.resolve_request(reference, max_year, self.version, self.api_channel),
                        lambda text: api.parse_details(text, max_year), resolved)

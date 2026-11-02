@@ -196,6 +196,7 @@ def _package(document, section, details=False):
     package.icon_url = read("PackageIconUrl", "packageIconUrl") or read("IconUrl", "iconUrl", "Icon")
     package.cover_image_url = read("CoverImageUrl", "coverImageUrl")
     package.download_url = read("DownloadUrl", "downloadUrl")
+    package.download_sha256 = read("Sha256", "sha256", "SHA256")
     package.rating = to_float(read("Rating", "rating") or "0")
     package.review_count = to_int(read("ReviewCount", "reviewCount") or "0")
     package.download_count = to_int(read("DownloadCount", "downloadCount") or "0")
