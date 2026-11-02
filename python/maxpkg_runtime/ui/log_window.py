@@ -8,7 +8,6 @@ from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, disable_max_accelerators
 from .frame import (EDGE, WindowChrome, apply_native_frame, bounded_position, glass_border, native_event,
                     paint_window_shape, prepare_window)
 from .settings_panel import Segments
-from .theme import with_alpha
 from .widgets import Button, Dropdown, IconLabel, SearchBox, Switch, hbox, label, vbox
 
 AREA_WIDTH = 12
@@ -17,12 +16,20 @@ LIVE_INTERVAL = 2000
 LINE_HEIGHT = 135  # percent
 PROPORTIONAL_HEIGHT = 1  # QTextBlockFormat.ProportionalHeight (an int in both Qt bindings)
 FONT_FAMILIES = ("Cascadia Mono", "Consolas", "Courier New")
-# level: (badge background, badge text, message text); None is the accent at 18% for the info badge
-LEVEL_TOKENS = {"debug": ("surfaceTertiary", "textMuted", "textMuted"),
-                "info": (None, "accentText", "textPrimary"),
-                "success": ("successSurface", "successText", "successText"),
-                "warning": ("warningSurface", "warningText", "warningText"),
-                "error": ("dangerSurface", "dangerText", "dangerText")}
+# Each level keeps its own hue in every theme (grey, blue, green, amber, red); theme accents vary too much
+# (some themes have a teal accent next to a teal success). level: (pill dark, text dark, pill light, text light)
+LEVEL_COLORS = {"debug": ("#3a3f47", "#a7adb7", "#e3e6ea", "#4d5560"),
+                "info": ("#1d3a5f", "#8ec5ff", "#dbeafe", "#1d4ed8"),
+                "success": ("#16432b", "#6ee7a0", "#dcfce7", "#15803d"),
+                "warning": ("#4a3a12", "#fbbf24", "#fef3c7", "#b45309"),
+                "error": ("#4c1d1d", "#f87171", "#fee2e2", "#b91c1c")}
+
+
+def level_colors(level, light):
+    """(pill, text) QColors of a level for a dark or light theme."""
+    colors = LEVEL_COLORS[level]
+    return (QtGui.QColor(colors[2]), QtGui.QColor(colors[3])) if light else (QtGui.QColor(colors[0]),
+                                                                           QtGui.QColor(colors[1]))
 
 
 def _monospace_font(size):
@@ -38,6 +45,51 @@ def _monospace_font(size):
             break
     font.setPointSizeF(size)
     return font
+
+
+def _text_x(line, position):
+    """QTextLine.cursorToX: a number in Qt, an (x, position) pair in some Qt for Python versions."""
+    x = line.cursorToX(position)
+    return x[0] if isinstance(x, tuple) else x
+
+
+class LogView(QtWidgets.QTextEdit):
+    """Read-only log text. Level badges are pills (fully rounded ends), which a character background cannot draw,
+    so the view paints them under the text: `pills` maps a line (block number) to (start, length, colour)."""
+
+    def __init__(self, parent=None):
+        QtWidgets.QTextEdit.__init__(self, parent)
+        self.pills = {}
+
+    def paintEvent(self, event):
+        if self.pills:
+            document = self.document()
+            layout = document.documentLayout()
+            offset = QtCore.QPointF(-self.horizontalScrollBar().value(), -self.verticalScrollBar().value())
+            area = event.rect()
+            first = self.cursorForPosition(QtCore.QPoint(0, area.top())).blockNumber()
+            last = self.cursorForPosition(QtCore.QPoint(0, area.bottom())).blockNumber()
+            painter = QtGui.QPainter(self.viewport())
+            painter.setRenderHint(QtGui.QPainter.Antialiasing)
+            painter.setPen(Qt.NoPen)
+            for number in range(first, last + 1):
+                pill = self.pills.get(number)
+                if pill is None:
+                    continue
+                start, length, color = pill
+                block = document.findBlockByNumber(number)
+                line = block.layout().lineForTextPosition(start)
+                if not line.isValid():
+                    continue
+                origin = layout.blockBoundingRect(block).topLeft() + offset
+                left = _text_x(line, start)
+                right = _text_x(line, start + length)
+                height = line.ascent() + line.descent() + 2
+                rect = QtCore.QRectF(origin.x() + left, origin.y() + line.y() - 1, right - left, height)
+                painter.setBrush(color)
+                painter.drawRoundedRect(rect, height / 2.0, height / 2.0)
+            painter.end()
+        QtWidgets.QTextEdit.paintEvent(self, event)
 
 
 class LogWindow(QtWidgets.QWidget):
@@ -85,7 +137,7 @@ class LogWindow(QtWidgets.QWidget):
         filters = hbox(self.day, self.level, self.search, self.summary, spacing=10, margins=(16, 12, 16, 10))
         filters.setStretch(2, 1)
 
-        self.view = QtWidgets.QTextEdit()
+        self.view = LogView()
         self.view.setObjectName("LogView")
         self.view.setReadOnly(True)
         self.view.setUndoRedoEnabled(False)
@@ -275,12 +327,13 @@ class LogWindow(QtWidgets.QWidget):
         theme = self.themes.manager
         self.view.setUpdatesEnabled(False)
         self.view.clear()
+        self.view.pills = {}
         cursor = QtGui.QTextCursor(self.view.document())
         cursor.beginEditBlock()
         block = QtGui.QTextBlockFormat()
         block.setLineHeight(LINE_HEIGHT, PROPORTIONAL_HEIGHT)
         cursor.setBlockFormat(block)
-        writer = _Writer(cursor, block, theme, self.log_font)
+        writer = _Writer(cursor, block, theme, self.log_font, self.view.pills)
         if not shown:
             if not self.days:
                 text = "Nothing has been logged yet."
@@ -302,12 +355,11 @@ class LogWindow(QtWidgets.QWidget):
                 writer.run("Session started {}  ·  {}".format(record.time, record.message), "accent", bold=True)
                 writer.line()
                 continue
-            background, badge, message = LEVEL_TOKENS[record.level]
-            badge_background = (theme.color(background) if background
-                                else with_alpha(theme.color("accent"), 0.18))
+            pill, badge = level_colors(record.level, theme.is_light)
+            message = {"info": "textPrimary", "debug": "textMuted"}.get(record.level, badge)
             writer.run(record.time, "textMuted")
             writer.run("  ")
-            writer.run(" {:<7} ".format(LEVEL_LABELS[record.level]), badge, bold=True, background=badge_background)
+            writer.run(" {:^7} ".format(LEVEL_LABELS[record.level]), badge, bold=True, pill=pill)
             writer.run("  ")
             area = record.area if len(record.area) <= AREA_WIDTH else record.area[:AREA_WIDTH - 1] + "…"
             writer.run(area.ljust(AREA_WIDTH), "changed")
@@ -325,21 +377,24 @@ class LogWindow(QtWidgets.QWidget):
 class _Writer(object):
     """Appends coloured runs and lines to the log document."""
 
-    def __init__(self, cursor, block, theme, font):
+    def __init__(self, cursor, block, theme, font, pills):
         self.cursor = cursor
         self.block = block
         self.theme = theme
         self.font = font
+        self.pills = pills
         self.empty = True
 
-    def run(self, text, token="textPrimary", bold=False, background=None):
+    def run(self, text, color="textPrimary", bold=False, pill=None):
+        """`color`: a theme token or a QColor. `pill`: a colour the view paints as a rounded pill behind this run
+        (one per line)."""
         character = QtGui.QTextCharFormat()
         character.setFont(self.font)
-        character.setForeground(self.theme.color(token))
+        character.setForeground(self.theme.color(color) if isinstance(color, str) else color)
         if bold:
             character.setFontWeight(QtGui.QFont.Bold)
-        if background is not None:
-            character.setBackground(background)
+        if pill is not None:
+            self.pills[self.cursor.blockNumber()] = (self.cursor.positionInBlock(), len(text), pill)
         self.cursor.insertText(text, character)
         self.empty = False
 
