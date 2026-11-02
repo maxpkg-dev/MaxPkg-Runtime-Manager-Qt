@@ -5,8 +5,8 @@ from ..qt_compat import QtCore, QtGui, QtWidgets, Qt
 from . import icons
 from .cards import DRAG_MIME, InstalledCard, RemoteCard
 from .theme import css_color, with_alpha
-from .widgets import (Button, EdgeFade, FlowRow, ResponsiveGrid, StatePanel, hbox, label, paint_check, repolish,
-                      vbox)
+from .widgets import (Button, EdgeFade, FlowRow, ResponsiveGrid, SearchingIcon, StateIcon, StatePanel, hbox, label,
+                      paint_check, repolish, vbox)
 
 WIDE_DISCOVER = 1200
 
@@ -82,6 +82,7 @@ class InstalledPage(ScrollPage):
         self.search = ""
         self.grid = ResponsiveGrid(min_width=270, spacing=14, max_columns=4)
         self.state = None
+        self._state_shown = None
         self.state_host = QtWidgets.QWidget()
         self.state_host.setLayout(vbox(margins=(0, 54, 0, 0)))
         self.canvas_layout.addWidget(self.grid)
@@ -133,19 +134,24 @@ class InstalledPage(ScrollPage):
         cards = [InstalledCard(package, self.manager_window, full=full, sortable=self.sortable(),
                                updates_view=self.view == "updates") for package in packages]
         self.grid.set_items(cards)
-        if self.state is not None:
+        wanted = None  # (icon kind, title, text); a panel showing the same stays, so its icon does not replay
+        if not packages:
+            if self.view == "updates" and self.runtime.packages and not self.search:
+                wanted = ("up-to-date", "Everything is up to date", "Use Check Updates to look for new versions.")
+            elif self.runtime.packages:
+                wanted = ("not-found", "No packages match", "Try a different search or filter.")
+            else:
+                wanted = ("package", "No packages installed",
+                          "Installed packages will appear here as soon as the Package Manager discovers their manifests.")
+        if self.state is not None and wanted != self._state_shown:
             self.state.hide()
             self.state.deleteLater()
             self.state = None
-        if not packages:
-            if self.runtime.packages:
-                title, text = "No packages match", "Try a different search or filter."
-            else:
-                title = "No packages installed"
-                text = "Installed packages will appear here as soon as the Package Manager discovers their manifests."
-            if self.view == "updates" and self.runtime.packages and not self.search:
-                title, text = "Everything is up to date", "Use Check Updates to look for new versions."
-            self.state = StatePanel(self.manager_window.themes, "package", title, text, "Refresh", "refresh-cw")
+        self._state_shown = wanted
+        if wanted is not None and self.state is None:
+            themes = self.manager_window.themes
+            self.state = StatePanel(themes, "package", wanted[1], wanted[2], "Refresh", "refresh-cw",
+                                    glyph=StateIcon(themes, wanted[0]))
             self.state.action.clicked.connect(self.runtime.scan)
             self.state_host.layout().addWidget(self.state, 0, Qt.AlignHCenter | Qt.AlignTop)
         self.state_host.setVisible(self.state is not None)
@@ -351,6 +357,8 @@ class DiscoverPage(ScrollPage):
         self.canvas_layout.addLayout(body, 1)
         self.wide = True
         self._state = None
+        self._state_content = None
+        self._kept_state = (None, None)
         self._shown = None
 
     def set_wide(self, wide):
@@ -363,10 +371,19 @@ class DiscoverPage(ScrollPage):
         self._build_pills()
         self._build_categories()
         self.set_wide(self.wide)
-        if self._state is not None:
-            self._state.hide()
-            self._state.deleteLater()
-            self._state = None
+        # A panel showing the same stays through this refresh: the catalog refreshes several times while it loads.
+        kept, kept_content = self._state, self._state_content
+        self._state, self._state_content = None, None
+        self._kept_state = (kept, kept_content)
+        try:
+            self._refresh_view(catalog, query)
+        finally:
+            self._kept_state = (None, None)
+            if kept is not None and kept is not self._state:
+                kept.hide()
+                kept.deleteLater()
+
+    def _refresh_view(self, catalog, query):
         page = catalog.page
         if not catalog.available and not catalog.loading:
             self._show_state("cloud-off", "Catalog unavailable", catalog.message or "Load the catalog to browse packages.",
@@ -376,7 +393,7 @@ class DiscoverPage(ScrollPage):
             self.pagination.hide()
             return
         if page is None:
-            self._show_state("search", "Loading Discover...", "Preparing the package catalog.")
+            self._show_state("loading", "Loading Discover...", "Preparing the package catalog.")
             self.summary.hide()
             self.pagination.hide()
             return
@@ -395,7 +412,7 @@ class DiscoverPage(ScrollPage):
             self.summary.show()
         else:
             self.summary.hide()
-            self._show_state("search", "No packages found",
+            self._show_state("not-found", "No packages found",
                              "This filter has no compatible packages." if selection else "Try a different search phrase.")
         multiple = page.total_pages > 1
         self.pagination.setVisible(multiple and bool(cards))
@@ -405,8 +422,16 @@ class DiscoverPage(ScrollPage):
         if query.page == 1:
             self.verticalScrollBar().setValue(0)
 
-    def _show_state(self, icon_name, title, text, action="", callback=None):
-        self._state = StatePanel(self.manager_window.themes, icon_name, title, text, action, "refresh-cw" if action else "")
+    def _show_state(self, kind, title, text, action="", callback=None):
+        """`kind`: "loading" (the looping magnifier) or a StateIcon kind."""
+        content = (kind, title, text, action)
+        self._state_content = content
+        if self._kept_state[1] == content:
+            self._state = self._kept_state[0]
+            return
+        themes = self.manager_window.themes
+        glyph = SearchingIcon(themes) if kind == "loading" else StateIcon(themes, kind)
+        self._state = StatePanel(themes, "search", title, text, action, "refresh-cw" if action else "", glyph=glyph)
         if callback is not None and self._state.action is not None:
             self._state.action.clicked.connect(lambda: callback())
         self.state_host.layout().addWidget(self._state, 0, Qt.AlignHCenter)

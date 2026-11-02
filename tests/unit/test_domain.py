@@ -281,7 +281,92 @@ class MessageTests(unittest.TestCase):
         self.assertEqual(without_links("Only a link:\nhttps://a.test/x"), "Only a link")
 
 
+class DescriptionPictureTests(unittest.TestCase):
+    """Pictures in descriptions, by the rules of the maxpkg.dev renderer."""
+
+    CDN = "https://cdn.maxpkg.dev/scripts/s1/content/"
+
+    def setUp(self):
+        self.pictures = markdown.Pictures("https://maxpkg.dev")
+
+    def split(self, source):
+        return markdown.split_media(source, self.pictures)
+
+    def picture(self, name):
+        return "![{0}]({1}{0}.png)".format(name, self.CDN)
+
+    def test_cdn_of_each_environment(self):
+        self.assertEqual(markdown.cdn_origin("https://maxpkg.dev"), "https://cdn.maxpkg.dev")
+        self.assertEqual(markdown.cdn_origin("https://dev.maxpkg.dev"), "https://cdn-dev.maxpkg.dev")
+        dev = markdown.Pictures("https://dev.maxpkg.dev")
+        self.assertEqual(dev.resolve("https://cdn-dev.maxpkg.dev/a.png"), "https://cdn-dev.maxpkg.dev/a.png")
+        self.assertEqual(dev.resolve(self.CDN + "a.png"), "")  # production pictures are not dev content
+
+    def test_one_picture(self):
+        self.assertEqual(self.split(self.picture("a")), [("images", [("a", self.CDN + "a.png")])])
+
+    def test_two_adjacent_lines_are_a_gallery(self):
+        blocks = self.split(self.picture("a") + "\n" + self.picture("b"))
+        self.assertEqual([(kind, len(items)) for kind, items in blocks], [("images", 2)])
+
+    def test_two_pictures_on_one_line_are_a_gallery(self):
+        blocks = self.split(self.picture("a") + "  " + self.picture("b"))
+        self.assertEqual([(kind, len(items)) for kind, items in blocks], [("images", 2)])
+
+    def test_blank_line_separates_pictures(self):
+        blocks = self.split(self.picture("a") + "\n\n" + self.picture("b"))
+        self.assertEqual([(kind, len(items)) for kind, items in blocks], [("images", 1), ("images", 1)])
+
+    def test_picture_text_picture_in_one_paragraph(self):
+        blocks = self.split(self.picture("a") + "\nSome text\n" + self.picture("b"))
+        self.assertEqual([kind for kind, _ in blocks], ["images", "text", "images"])
+        self.assertEqual(blocks[1][1], "Some text")
+
+    def test_pictures_in_a_list_item_and_a_table_cell_render_inline(self):
+        source = "- item " + self.picture("a") + "\n\n| Name | Picture |\n| --- | --- |\n| x | " + \
+                 self.picture("b") + " |"
+        blocks = self.split(source)
+        self.assertEqual([kind for kind, _ in blocks], ["text"])
+        html = markdown.to_html(blocks[0][1], self.pictures)
+        self.assertIn('<li>item <a href="maxpkg-picture:0"><img src="' + self.CDN + 'a.png" alt="a"></a></li>', html)
+        self.assertIn('<td align="left"><a href="maxpkg-picture:1"><img src="' + self.CDN + 'b.png"', html)
+        self.assertEqual([url for _, url in self.pictures.items], [self.CDN + "a.png", self.CDN + "b.png"])
+
+    def test_picture_in_a_code_block_is_code(self):
+        source = "```\n" + self.picture("a") + "\n```"
+        blocks = self.split(source)
+        self.assertEqual([kind for kind, _ in blocks], ["text"])
+        html = markdown.to_html(blocks[0][1], self.pictures)
+        self.assertIn("<pre>![a](", html)
+        self.assertEqual(self.pictures.items, [])
+
+    def test_picture_off_the_cdn_is_alt_text_only(self):
+        for url in ("https://evil.test/a.png", "http://cdn.maxpkg.dev/a.png", "//cdn.maxpkg.dev/a.png",
+                    "javascript:alert", "https://cdn.maxpkg.dev.evil.test/a.png", "file:///C:/a.png"):
+            source = "![Alt <b>text</b>](" + url + ")"
+            self.assertEqual(self.split(source), [("text", source)], url)
+            html = markdown.to_html(source, self.pictures)
+            self.assertEqual(html, "<p>Alt &lt;b&gt;text&lt;/b&gt;</p>", url)
+        self.assertEqual(self.pictures.items, [])
+
+    def test_site_relative_picture_loads_from_the_service(self):
+        self.assertEqual(self.split("![a](/uploads/a.png)"), [("images", [("a", "https://maxpkg.dev/uploads/a.png")])])
+
+    def test_same_picture_twice_has_two_positions(self):
+        html = markdown.to_html("Before " + self.picture("a") + " and " + self.picture("a"), self.pictures)
+        self.assertIn("maxpkg-picture:0", html)
+        self.assertIn("maxpkg-picture:1", html)
+        self.assertEqual(len(self.pictures.items), 2)
+
+    def test_title_is_ignored_and_text_without_pictures_is_unchanged(self):
+        self.assertEqual(self.split('![a](' + self.CDN + 'a.png "Title")'), [("images", [("a", self.CDN + "a.png")])])
+        source = "### Links\n**Website:** [Site](https://a.test/)\n- one"
+        self.assertEqual(self.split(source), [("text", source)])
+        self.assertEqual(markdown.to_html(source, self.pictures), markdown.to_html(source))
+
+
 class MarkdownTests(unittest.TestCase):
+
     def test_subset(self):
         html = markdown.to_html("# Title\n\nSome **bold** and `code`.\n\n- one\n- two\n\n<script>")
         self.assertIn("<h3>Title</h3>", html)
@@ -313,7 +398,8 @@ class MarkdownTests(unittest.TestCase):
         self.assertIn('<a href="https://maxpkg.dev/docs">https://maxpkg.dev/docs</a>.', html)
         self.assertIn('<a href="https://maxpkg.dev/docs">Docs</a>', html)
         self.assertNotIn("javascript", html)
-        self.assertIn('<a href="https://x.test/a.png">shot</a>', html)
+        self.assertIn("bad) shot</p>", html)  # a picture off the content CDN is its alt text, never a request
+        self.assertNotIn("x.test", html)
         self.assertIn("<blockquote><p>quoted <i>text</i></p></blockquote>", html)
         self.assertIn("<pre>&lt;b&gt;raw&lt;/b&gt;</pre>", html)
 

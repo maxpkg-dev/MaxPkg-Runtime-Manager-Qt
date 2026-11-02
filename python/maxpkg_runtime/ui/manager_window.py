@@ -18,8 +18,9 @@ from .frame import (EDGE, WindowChrome, apply_native_frame, bounded_position, gl
 from .pages import WIDE_DISCOVER, DiscoverPage, InstalledPage
 from .log_window import LogWindow
 from .settings_panel import SettingsPanel
-from .widgets import (BrandLogo, Button, ClearableDropdown, IconButton, IconLabel, SearchBox, SlideView, add_action,
-                      add_danger_action, add_menu_title, hbox, label, repolish, themed_menu, vbox)
+from .widgets import (BOX_INNER, BOX_OUTLINE, BrandLogo, Button, ClearableDropdown, IconButton, IconLabel, SearchBox,
+                      SlideView, add_action, add_danger_action, add_menu_title, ease_out, hbox, label, partial_line,
+                      repolish, round_pen, themed_menu, vbox)
 
 MIN_WIDTH = 680
 HEADER_ICON_ONLY = 850  # 720 in the HTML Manager; the header now also holds the window and Support buttons
@@ -243,35 +244,6 @@ class Toast(QtWidgets.QFrame):
         painter.end()
 
 
-def _ease(progress):
-    return 1.0 - (1.0 - progress) ** 3
-
-
-def _round_pen(color, width):
-    pen = QtGui.QPen(color, width)
-    pen.setCapStyle(Qt.RoundCap)
-    pen.setJoinStyle(Qt.RoundJoin)
-    return pen
-
-
-def _partial(points, fraction):
-    """The first `fraction` (0..1) of a polyline, by length."""
-    if fraction <= 0:
-        return []
-    lengths = [math.hypot(end[0] - start[0], end[1] - start[1]) for start, end in zip(points, points[1:])]
-    left = sum(lengths) * min(1.0, fraction)
-    drawn = [points[0]]
-    for (start, end), length in zip(zip(points, points[1:]), lengths):
-        if left >= length:
-            drawn.append(end)
-            left -= length
-        else:
-            share = left / length if length else 0.0
-            drawn.append((start[0] + (end[0] - start[0]) * share, start[1] + (end[1] - start[1]) * share))
-            break
-    return drawn
-
-
 class StatusIcon(QtWidgets.QWidget):
     """Animated operation icon drawn with QPainter, the same as TerraScoop's build card (QtSvg plays almost no SVG
     animation). running: the Lucide box draws itself (outline, inner edges, a pulse, a fade, again);
@@ -284,9 +256,6 @@ class StatusIcon(QtWidgets.QWidget):
     DONE_SECONDS = 0.9
     ERROR_SECONDS = 0.9
     LOOP = 2.4  # seconds per drawing loop of the box
-    # Lucide "box" on its 24-unit grid: the outline (a hexagon) and the inner edges.
-    BOX_OUTLINE = ((12, 2), (21, 7), (21, 17), (12, 22), (3, 17), (3, 7), (12, 2))
-    BOX_INNER = (((3, 7), (12, 12), (21, 7)), ((12, 12), (12, 22)))
 
     def __init__(self, themes, size=SIZE, parent=None):
         """Drawn on a 44 px grid and scaled to `size`."""
@@ -350,8 +319,8 @@ class StatusIcon(QtWidgets.QWidget):
 
     def _paint_running(self, painter, elapsed, accent):
         phase = (elapsed % self.LOOP) / self.LOOP
-        outline = _ease(min(1.0, phase / 0.45))
-        inner = _ease(max(0.0, min(1.0, (phase - 0.35) / 0.3)))
+        outline = ease_out(min(1.0, phase / 0.45))
+        inner = ease_out(max(0.0, min(1.0, (phase - 0.35) / 0.3)))
         pulse = 1.0 + 0.06 * math.sin(max(0.0, min(1.0, (phase - 0.7) / 0.15)) * math.pi) if phase > 0.7 else 1.0
         alpha = 1.0 if phase < 0.88 else max(0.0, 1.0 - (phase - 0.88) / 0.12)
         painter.translate(self.SIZE / 2.0, self.SIZE / 2.0)
@@ -359,30 +328,30 @@ class StatusIcon(QtWidgets.QWidget):
         painter.translate(-12.0, -12.0)
         faint = QtGui.QColor(accent)
         faint.setAlpha(40)
-        painter.setPen(_round_pen(faint, 1.6))
+        painter.setPen(round_pen(faint, 1.6))
         for line in self._box_paths(1.0, 1.0):
             painter.drawPolyline(QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in line]))
         color = QtGui.QColor(accent)
         color.setAlphaF(alpha)
-        painter.setPen(_round_pen(color, 1.9))
+        painter.setPen(round_pen(color, 1.9))
         for line in self._box_paths(outline, inner):
             if len(line) > 1:
                 painter.drawPolyline(QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in line]))
 
     def _box_paths(self, outline, inner):
         """The box's lines, each cut to the drawn fraction."""
-        paths = [_partial(self.BOX_OUTLINE, outline)]
-        paths.extend(_partial(line, inner) for line in self.BOX_INNER)
+        paths = [partial_line(BOX_OUTLINE, outline)]
+        paths.extend(partial_line(line, inner) for line in BOX_INNER)
         return paths
 
     def _paint_done(self, painter, progress, color):
-        eased = _ease(progress)
+        eased = ease_out(progress)
         spring = 1.0 + 0.07 * math.sin(max(0.0, (progress - 0.66) / 0.34) * math.pi) if progress > 0.66 else 1.0
         painter.translate(self.SIZE / 2.0, self.SIZE / 2.0)
         painter.scale(spring, spring)
         painter.translate(-self.SIZE / 2.0, -self.SIZE / 2.0)
         ring = QtCore.QRectF(4, 4, self.SIZE - 8, self.SIZE - 8)  # room for the spring
-        painter.setPen(_round_pen(color, 2.6))
+        painter.setPen(round_pen(color, 2.6))
         painter.drawArc(ring, 90 * 16, int(-360.0 * min(1.0, eased / 0.6) * 16))
         tick = max(0.0, min(1.0, (eased - 0.45) / 0.45))
         if tick > 0:
@@ -399,30 +368,30 @@ class StatusIcon(QtWidgets.QWidget):
             else:
                 path.lineTo(points[1])
                 path.lineTo(points[1] + (points[2] - points[1]) * ((length - first) / second))
-            painter.setPen(_round_pen(color, 3.0))
+            painter.setPen(round_pen(color, 3.0))
             painter.drawPath(path)
 
     def _paint_info(self, painter, progress, color):
         """The circle draws in, the dot of the "i" pops in, then its stem grows downwards."""
-        ring_part = _ease(min(1.0, progress / 0.45))
-        stem_part = _ease(max(0.0, min(1.0, (progress - 0.5) / 0.35)))
+        ring_part = ease_out(min(1.0, progress / 0.45))
+        stem_part = ease_out(max(0.0, min(1.0, (progress - 0.5) / 0.35)))
         ring = QtCore.QRectF(4, 4, self.SIZE - 8, self.SIZE - 8)
-        painter.setPen(_round_pen(color, 2.6))
+        painter.setPen(round_pen(color, 2.6))
         painter.drawArc(ring, 90 * 16, int(-360.0 * ring_part * 16))
         middle = self.SIZE / 2.0
         if progress > 0.38:
             pop = min(1.0, (progress - 0.38) / 0.12)
-            painter.setPen(_round_pen(color, 3.0 + 1.2 * math.sin(pop * math.pi)))
+            painter.setPen(round_pen(color, 3.0 + 1.2 * math.sin(pop * math.pi)))
             painter.drawPoint(QtCore.QPointF(middle, 14.5))
         if stem_part > 0:
-            painter.setPen(_round_pen(color, 3.0))
+            painter.setPen(round_pen(color, 3.0))
             painter.drawLine(QtCore.QPointF(middle, 20.5), QtCore.QPointF(middle, 20.5 + 9.5 * stem_part))
 
     def _paint_error(self, painter, progress, color, hop=False):
         """The circle draws in, the "!" is drawn from the top, its dot pops in, and the icon shakes (an error)
         or makes a small hop (a warning)."""
-        ring_part = _ease(min(1.0, progress / 0.45))
-        bar_part = _ease(max(0.0, min(1.0, (progress - 0.35) / 0.3)))
+        ring_part = ease_out(min(1.0, progress / 0.45))
+        bar_part = ease_out(max(0.0, min(1.0, (progress - 0.35) / 0.3)))
         if hop:
             lift = -math.sin(max(0.0, min(1.0, (progress - 0.6) / 0.3)) * math.pi) * 3.0 if progress > 0.6 else 0.0
             painter.translate(0, lift)
@@ -430,10 +399,10 @@ class StatusIcon(QtWidgets.QWidget):
             shake = math.sin((progress - 0.45) * math.pi * 8) * 4.5 * (1.0 - progress) if progress > 0.45 else 0.0
             painter.translate(shake, 0)
         ring = QtCore.QRectF(4, 4, self.SIZE - 8, self.SIZE - 8)
-        painter.setPen(_round_pen(color, 2.6))
+        painter.setPen(round_pen(color, 2.6))
         painter.drawArc(ring, 90 * 16, int(-360.0 * ring_part * 16))
         middle = self.SIZE / 2.0
-        painter.setPen(_round_pen(color, 3.0))
+        painter.setPen(round_pen(color, 3.0))
         if bar_part > 0:
             painter.drawLine(QtCore.QPointF(middle, 13.5), QtCore.QPointF(middle, 13.5 + 11.0 * bar_part))
         if progress > 0.68:
@@ -695,7 +664,8 @@ class ScreenshotPreview(QtWidgets.QWidget):
         # Full width so slides cross the whole lightbox; images are fitted 70 px in from each side.
         self.image.setGeometry(self.rect().adjusted(0, 40, 0, -80))
         self.image.refresh()
-        self.caption.setText("<b>{}</b><br>{}".format(shot.title, shot.caption))
+        # Description pictures have no caption: their alt text is often a file name.
+        self.caption.setText("<b>{}</b><br>{}".format(shot.title, shot.caption) if shot.title or shot.caption else "")
         self.caption.setGeometry(70, self.height() - 74, self.width() - 140, 60)
         middle = self.height() // 2 - 20
         self.buttons[0].move(18, middle)

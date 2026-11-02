@@ -1,11 +1,14 @@
 """Package Details page: hero, purchase notice, Description/Screenshots/Videos/Changelog tabs, information table."""
 
 import math
+import re
+from html import unescape
 
 from ..domain import markdown
-from ..domain.packages import changelog_versions, compact_number, supported_versions
+from ..domain.packages import Screenshot, changelog_versions, compact_number, supported_versions
 from ..qt_compat import QtCore, QtGui, QtWidgets, Qt, Signal, event_pos
 from ..services.images import rounded
+from . import icons
 from .cards import PackageIcon
 from .pages import ScrollPage
 from .widgets import (Badge, Button, CopyButton, DragScroll, FlowRow, IconLabel, Shimmer, SlideView, hbox, label,
@@ -65,24 +68,116 @@ class AutoHeightBrowser(QtWidgets.QTextBrowser):
 
 
 
+def zoom_cursor():
+    """A magnifier with a plus, white on a dark disc so it shows on light and dark pictures."""
+    size = 28
+    result = QtGui.QPixmap(size, size)
+    result.fill(Qt.transparent)
+    painter = QtGui.QPainter(result)
+    painter.setRenderHint(QtGui.QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QtGui.QColor(0, 0, 0, 150))
+    painter.drawEllipse(QtCore.QRectF(1, 1, size - 2, size - 2))
+    painter.drawPixmap(5, 5, icons.pixmap("zoom-in", QtGui.QColor("#ffffff"), size - 10))
+    painter.end()
+    return QtGui.QCursor(result, size // 2, size // 2)
+
+
+class DescriptionBrowser(AutoHeightBrowser):
+    """Description text whose pictures sit inside it (a list item, a table cell, beside words). Each picture is a
+    maxpkg-picture:<position> link around an <img>: the picture comes from the image cache (a grey box until it
+    arrives, at most INLINE_WIDTH wide, never enlarged) and a click asks for the full size in the lightbox. Other
+    links open in the browser."""
+
+    picture_clicked = Signal(int)
+    INLINE_WIDTH = 360
+    OBJECT_CHARACTER = "\ufffc"  # what a picture is in the document's text
+
+    def __init__(self, images, themes, parent=None):
+        AutoHeightBrowser.__init__(self, parent)
+        self.images = images
+        self.themes = themes
+        self._urls = []
+        self._width = 0
+        self.setOpenLinks(False)  # links are handled in _on_anchor
+        self.anchorClicked.connect(self._on_anchor)
+        images.ready.connect(self._on_ready)
+
+    def set_description(self, html):
+        self._urls = list(dict.fromkeys(unescape(url) for url in re.findall(r'<img src="([^"]+)"', html)))
+        self._add_pictures()
+        self.setHtml(html)
+        self._single_height_picture_lines()
+
+    def _single_height_picture_lines(self):
+        """Description lines are 150 % high; on a line with a picture that would add half the picture as a gap."""
+        block = self.document().begin()
+        while block.isValid():
+            if self.OBJECT_CHARACTER in block.text():
+                cursor = QtGui.QTextCursor(block)
+                block_format = block.blockFormat()
+                block_format.setLineHeight(100, 1)  # 1 = ProportionalHeight, an int in both Qt bindings
+                cursor.setBlockFormat(block_format)
+            block = block.next()
+
+    def _picture(self, url, width):
+        picture = self.images.get(url)
+        if picture is None or picture.isNull():
+            box = QtGui.QPixmap(min(width, 160), 90)
+            box.fill(self.themes.manager.color("surfaceSecondary"))
+            return box
+        return picture.scaledToWidth(width, Qt.SmoothTransformation) if picture.width() > width else picture
+
+    def _add_pictures(self):
+        self._width = max(40, min(self.INLINE_WIDTH, self.viewport().width() - 4))
+        for url in self._urls:
+            self.document().addResource(QtGui.QTextDocument.ImageResource, QtCore.QUrl(url),
+                                        self._picture(url, self._width))
+
+    def _refresh(self):
+        self._add_pictures()
+        self.document().markContentsDirty(0, self.document().characterCount())
+        self._fit()
+
+    def _on_ready(self, source):
+        if source in self._urls:
+            self._refresh()
+
+    def resizeEvent(self, event):
+        AutoHeightBrowser.resizeEvent(self, event)
+        if self._urls and max(40, min(self.INLINE_WIDTH, self.viewport().width() - 4)) != self._width:
+            self._refresh()
+
+    def _on_anchor(self, url):
+        target = url.toString()
+        if target.startswith(markdown.PICTURE_LINK):
+            self.picture_clicked.emit(int(target[len(markdown.PICTURE_LINK):]))
+        else:
+            QtGui.QDesktopServices.openUrl(url)  # what openExternalLinks did
+
+
 class ScreenshotViewer(QtWidgets.QWidget):
     """Screenshot gallery: main image with round previous/next buttons and a 'n / N' counter, title and caption,
     and a thumbnail strip. A click on the image opens the full-window lightbox.
 
     compact=True is the side gallery of wide Details windows (above Package information): smaller image, one
-    horizontally scrollable row of thumbnails, caption under the title.
+    horizontally scrollable row of thumbnails, caption under the title. titles=False leaves out the title and caption
+    (pictures in a description, whose alt text is often a file name); loop=False stops at the first and last image;
+    heights=(minimum, maximum) bounds the image area, which follows the width.
     """
 
     preview_requested = Signal(int)
 
-    def __init__(self, shots, images, themes, compact=False, parent=None):
+    def __init__(self, shots, images, themes, compact=False, titles=True, loop=True, heights=(260, 460), parent=None):
         QtWidgets.QWidget.__init__(self, parent)
         self.shots = shots
+        self.titles = titles
+        self.heights = heights
         self.images = images
         self.compact = compact
         self.index = 0
         self.main = SlideView(len(shots), lambda position: images.get(shots[position].url), themes, radius=7,
-                              failed_for=lambda position: images.failed(shots[position].url))
+                              failed_for=lambda position: images.failed(shots[position].url), loop=loop)
         self.main.setObjectName("ScreenshotMain")
         self.main.setMinimumHeight(150 if compact else 260)
         self.main.setCursor(Qt.PointingHandCursor)
@@ -102,6 +197,7 @@ class ScreenshotViewer(QtWidgets.QWidget):
         self.counter.setVisible(len(shots) > 1)
         self.title = label("", "ChangelogVersion", wrap=True)
         self.caption = label("", "Muted", wrap=True)
+        self.title.setVisible(titles)
         self._thumb_buttons = []
         thumb_size = QtCore.QSize(88, 54) if compact else QtCore.QSize(120, 72)
         self._thumb_icon = QtCore.QSize(thumb_size.width() - 6, thumb_size.height() - 6)
@@ -154,7 +250,7 @@ class ScreenshotViewer(QtWidgets.QWidget):
         shot = self.shots[self.index]
         self.title.setText(shot.title)
         self.caption.setText(shot.caption)
-        self.caption.setVisible(bool(shot.caption))
+        self.caption.setVisible(self.titles and bool(shot.caption))
         self.counter.setText("{} / {}".format(self.index + 1, len(self.shots)))
         self.counter.adjustSize()
         for position, button in enumerate(self._thumb_buttons):
@@ -182,13 +278,84 @@ class ScreenshotViewer(QtWidgets.QWidget):
         if self.compact:
             height = max(150, int(self.width() * 0.62))
         else:
-            height = max(260, min(460, int(self.width() * 0.56)))
+            height = max(self.heights[0], min(self.heights[1], int(self.width() * 0.56)))
         self.main.setFixedHeight(height)
         self.left.move(10, height // 2 - 16)
         self.right.move(self.width() - 42, height // 2 - 16)
         self.counter.adjustSize()  # the first select() runs before the stylesheet padding is known
         self.counter.move(self.width() - self.counter.width() - 10, height - self.counter.height() - 10)
         self._paint()
+
+
+class DescriptionImage(QtWidgets.QWidget):
+    """A picture of a package description, as on maxpkg.dev: its own size, or the description width when it is
+    wider, centred with rounded corners; a click opens the lightbox."""
+
+    clicked = Signal()
+    RADIUS = 8
+    LOADING_RATIO = 9 / 16.0  # height for width until the picture has arrived
+
+    def __init__(self, shot, images, themes, parent=None):
+        QtWidgets.QWidget.__init__(self, parent)
+        self.shot = shot
+        self.images = images
+        self.themes = themes
+        self.setCursor(zoom_cursor())
+        self.setToolTip("Click to enlarge")
+        policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+        images.ready.connect(self._on_ready)
+
+    def _picture(self):
+        picture = self.images.get(self.shot.url)
+        return picture if picture is not None and not picture.isNull() else None
+
+    def _target(self, width):
+        """Where the picture goes in a widget `width` wide (logical pixels)."""
+        picture = self._picture()
+        if picture is None:
+            return QtCore.QRectF(0, 0, width, width * self.LOADING_RATIO)
+        natural = picture.size() / max(1.0, picture.devicePixelRatioF())
+        shown = natural.scaled(min(width, natural.width()), 100000, Qt.KeepAspectRatio)
+        return QtCore.QRectF((width - shown.width()) / 2.0, 0, shown.width(), shown.height())
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return int(round(self._target(width).height()))
+
+    def sizeHint(self):
+        return QtCore.QSize(400, self.heightForWidth(400))
+
+    def _on_ready(self, source):
+        if source == self.shot.url:
+            self.updateGeometry()
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event_pos(event)):
+            self.clicked.emit()
+
+    def paintEvent(self, _event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        target = self._target(self.width())
+        clip = QtGui.QPainterPath()
+        clip.addRoundedRect(target, self.RADIUS, self.RADIUS)
+        painter.setClipPath(clip)
+        picture = self._picture()
+        if picture is None:
+            painter.fillRect(target, self.themes.manager.color("surfaceSecondary"))
+            if self.images.failed(self.shot.url):
+                painter.setClipping(False)
+                painter.setPen(self.themes.manager.color("textMuted"))
+                painter.drawText(target, Qt.AlignCenter, "This picture could not be loaded.")
+        else:
+            painter.drawPixmap(target, picture, QtCore.QRectF(picture.rect()))
+        painter.end()
 
 
 class VideoThumbnail(QtWidgets.QWidget):
@@ -508,10 +675,36 @@ class DetailsPage(ScrollPage):
             return self._videos(package)
         holder = QtWidgets.QWidget()
         frame, layout = section("Description")
-        browser = AutoHeightBrowser()
-        html = markdown.to_html(package.full_description) if package.full_description else ""
-        if not html:
-            html = "<p>" + markdown.inline(package.description or "No description provided.") + "</p>"
+        # Pictures load only from the service's content CDN or its own site (maxpkg.dev rules), numbered in reading
+        # order: a click outside a gallery walks all of them in the lightbox, a gallery click only its own.
+        pictures = markdown.Pictures(self.runtime.site_url())
+        everything = []  # Screenshot per picture position, filled once the whole description is laid out
+        parts = []
+        for kind, content in (markdown.split_media(package.full_description, pictures)
+                              if package.full_description else []):
+            if kind == "images":
+                positions = [pictures.add(alt, url) for alt, url in content]
+                parts.append(self._description_pictures(positions, pictures, everything))
+                continue
+            html = markdown.to_html(content, pictures)
+            if html:
+                parts.append(self._description_text(html, everything))
+        everything.extend(Screenshot(url, url, "") for _alt, url in pictures.items)  # alt is no caption
+        if not parts:
+            parts.append(self._description_text(
+                "<p>" + markdown.inline(package.description or "No description provided.") + "</p>", everything))
+        for part in parts:
+            layout.addWidget(part)
+        column = vbox(frame, spacing=12)
+        links = self._links(package) if self.single_column else None  # wide windows show Links in the side column
+        if links is not None:
+            column.addWidget(links)
+        holder.setLayout(column)
+        return holder
+
+    def _description_text(self, html, everything):
+        browser = DescriptionBrowser(self.manager_window.images, self.manager_window.themes)
+        browser.picture_clicked.connect(lambda position: self.manager_window.preview_screenshots(everything, position))
         theme = self.manager_window.themes.manager
         colors = {name: theme.color(name).name() for name in (
             "textSecondary", "textStrong", "textPrimary", "textMuted", "accentHover", "borderStrong",
@@ -526,14 +719,25 @@ class DetailsPage(ScrollPage):
             " th {{ background-color: {surfaceTertiary}; color: {textStrong}; font-weight: bold;"
             " border: 1px solid {borderStrong}; }}"
             " td {{ color: {textSecondary}; border: 1px solid {borderStrong}; }}".format(**colors))
-        browser.setHtml(html)
-        layout.addWidget(browser)
-        column = vbox(frame, spacing=12)
-        links = self._links(package) if self.single_column else None  # wide windows show Links in the side column
-        if links is not None:
-            column.addWidget(links)
-        holder.setLayout(column)
-        return holder
+        browser.set_description(html)
+        return browser
+
+    def _description_pictures(self, positions, pictures, everything):
+        """Pictures on lines of their own: one at the description width, several as a carousel in a bordered block
+        with 'N images' at the top right (one slide at a time, no looping, thumbnails below)."""
+        images, themes = self.manager_window.images, self.manager_window.themes
+        shots = [Screenshot(pictures.items[position][1], pictures.items[position][1], "") for position in positions]
+        if len(shots) == 1:
+            picture = DescriptionImage(shots[0], images, themes)
+            picture.clicked.connect(lambda: self.manager_window.preview_screenshots(everything, positions[0]))
+            return picture
+        gallery = QtWidgets.QFrame()
+        gallery.setObjectName("DescriptionGallery")
+        viewer = ScreenshotViewer(shots, images, themes, titles=False, loop=False, heights=(200, 600))
+        viewer.preview_requested.connect(lambda index: self.manager_window.preview_screenshots(shots, index))
+        count = label("{} images".format(len(shots)), "Muted")
+        gallery.setLayout(vbox(hbox(None, count), viewer, spacing=6, margins=(12, 10, 12, 12)))
+        return gallery
 
     def _links(self, package):
         themes = self.manager_window.themes

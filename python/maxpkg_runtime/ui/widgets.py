@@ -394,14 +394,244 @@ class ElidedText(QtWidgets.QWidget):
         painter.end()
 
 
-class StatePanel(QtWidgets.QFrame):
-    """Centered empty/error state: icon, title, text and an optional action button."""
+def ease_out(progress):
+    """Cubic ease-out of a 0..1 progress (the animated icons)."""
+    return 1.0 - (1.0 - progress) ** 3
 
-    def __init__(self, themes, icon_name, title, text, action_text="", action_icon="", parent=None):
+
+def round_pen(color, width):
+    pen = QtGui.QPen(color, width)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    return pen
+
+
+def partial_line(points, fraction):
+    """The first `fraction` (0..1) of a polyline, by length."""
+    if fraction <= 0:
+        return []
+    lengths = [math.hypot(end[0] - start[0], end[1] - start[1]) for start, end in zip(points, points[1:])]
+    left = sum(lengths) * min(1.0, fraction)
+    drawn = [points[0]]
+    for (start, end), length in zip(zip(points, points[1:]), lengths):
+        if left >= length:
+            drawn.append(end)
+            left -= length
+        else:
+            share = left / length if length else 0.0
+            drawn.append((start[0] + (end[0] - start[0]) * share, start[1] + (end[1] - start[1]) * share))
+            break
+    return drawn
+
+
+def _span(value, start, end):
+    """How far `value` is through start..end, as 0..1."""
+    return max(0.0, min(1.0, (value - start) / (end - start)))
+
+
+def _polyline(painter, points):
+    if len(points) > 1:
+        painter.drawPolyline(QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in points]))
+
+
+def _paint_magnifier(painter, color, width, lens, handle):
+    """Lucide "search" on its grid: the lens and the handle, each drawn up to a 0..1 fraction."""
+    painter.setPen(round_pen(color, width))
+    if lens > 0:
+        painter.drawArc(QtCore.QRectF(3, 3, 16, 16), 90 * 16, int(-360 * lens * 16))
+    if handle > 0:
+        start = QtCore.QPointF(16.65, 16.65)
+        painter.drawLine(start, start + (QtCore.QPointF(21, 21) - start) * handle)
+
+
+# Lucide "box" on its 24-unit grid: the outline (a hexagon) and the inner edges.
+BOX_OUTLINE = ((12, 2), (21, 7), (21, 17), (12, 22), (3, 17), (3, 7), (12, 2))
+BOX_INNER = (((3, 7), (12, 12), (21, 7)), ((12, 12), (12, 22)))
+
+
+def _paint_box(painter, outline, inner):
+    _polyline(painter, partial_line(BOX_OUTLINE, outline))
+    for line in BOX_INNER:
+        _polyline(painter, partial_line(line, inner))
+
+
+class AnimatedGlyph(QtWidgets.QWidget):
+    """A large icon drawn with QPainter on Lucide's 24-unit grid, like the Manager's operation icon (QtSvg plays almost
+    no SVG animation). It plays each time it is shown: for ever when DURATION is None, otherwise once, and then it
+    stays as the finished icon. The timer runs only while something moves."""
+
+    SIZE = 42
+    FPS = 30
+    GRID = 24.0
+    DURATION = None  # seconds of a one-shot animation
+
+    def __init__(self, themes, size=SIZE, parent=None):
+        QtWidgets.QWidget.__init__(self, parent)
+        self.themes = themes
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._clock = QtCore.QElapsedTimer()
+        self._clock.start()
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(int(1000 / self.FPS))
+        self._timer.timeout.connect(self._tick)
+
+    def _seconds(self):
+        seconds = self._clock.elapsed() / 1000.0
+        return seconds if self.DURATION is None else min(seconds, self.DURATION)
+
+    def _tick(self):
+        self.update()
+        if self.DURATION is not None and self._seconds() >= self.DURATION:
+            self._timer.stop()  # this last repaint shows the finished icon
+
+    def showEvent(self, event):
+        QtWidgets.QWidget.showEvent(self, event)
+        self._clock.restart()
+        self._timer.start()
+
+    def hideEvent(self, event):
+        self._timer.stop()
+        QtWidgets.QWidget.hideEvent(self, event)
+
+    def paintEvent(self, _event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.scale(self.width() / self.GRID, self.height() / self.GRID)
+        self.paint_icon(painter, self._seconds())
+        painter.end()
+
+    def paint_icon(self, painter, seconds):
+        raise NotImplementedError
+
+    def faint(self, color):
+        """The outline the icon draws itself over."""
+        track = QtGui.QColor(color)
+        track.setAlpha(40)
+        return track
+
+
+class SearchingIcon(AnimatedGlyph):
+    """Something is loading: the lens and then the handle draw in, the magnifier makes one small circle as if looking
+    around while a glint sweeps the lens, then it fades and starts again."""
+
+    LOOP = 2.6  # seconds per loop
+
+    def paint_icon(self, painter, seconds):
+        phase = (seconds % self.LOOP) / self.LOOP
+        lens = ease_out(min(1.0, phase / 0.32))
+        handle = ease_out(_span(phase, 0.24, 0.38))
+        orbit = _span(phase, 0.4, 0.86)
+        alpha = 1.0 if phase < 0.9 else max(0.0, 1.0 - (phase - 0.9) / 0.1)
+        accent = self.themes.manager.color("accent")
+        _paint_magnifier(painter, self.faint(accent), 1.6, 1.0, 1.0)
+        # Looking around: one turn on a small circle, starting and ending at rest.
+        angle = orbit * 2 * math.pi
+        reach = 1.4 * math.sin(orbit * math.pi)
+        painter.translate(reach * math.sin(angle), -reach * (1.0 - math.cos(angle)) * 0.5)
+        color = QtGui.QColor(accent)
+        color.setAlphaF(alpha)
+        _paint_magnifier(painter, color, 1.9, lens, handle)
+        if 0.0 < orbit < 1.0:
+            glint = QtGui.QColor(accent)
+            glint.setAlphaF(alpha * 0.85 * math.sin(orbit * math.pi))
+            painter.setPen(round_pen(glint, 1.3))
+            painter.drawArc(QtCore.QRectF(6.2, 6.2, 9.6, 9.6), int((150 - orbit * 360) * 16), 55 * 16)
+
+
+class StateIcon(AnimatedGlyph):
+    """A result that stays on screen, so it plays once and rests (a loop here would only distract). kind:
+    "package" nothing here yet: the box draws itself; "up-to-date" the ring and then the tick, with a small spring;
+    "not-found" the magnifier draws in and shakes its head; "cloud-off" the cloud draws in and a line cuts through."""
+
+    DURATION = 1.1
+
+    def __init__(self, themes, kind, size=AnimatedGlyph.SIZE, parent=None):
+        AnimatedGlyph.__init__(self, themes, size, parent)
+        self.kind = kind
+
+    def paint_icon(self, painter, seconds):
+        progress = seconds / self.DURATION
+        theme = self.themes.manager
+        if self.kind == "up-to-date":
+            self._paint_up_to_date(painter, progress, theme.color("success"))
+        elif self.kind == "not-found":
+            self._paint_not_found(painter, progress, theme.color("accent"))
+        elif self.kind == "cloud-off":
+            self._paint_cloud_off(painter, progress, theme.color("warning"))
+        else:
+            self._paint_package(painter, progress, theme.color("accent"))
+
+    def _spring(self, painter, progress, start):
+        """A small swell around the centre once the drawing is done."""
+        swell = 1.0 + 0.06 * math.sin(_span(progress, start, 1.0) * math.pi)
+        painter.translate(self.GRID / 2.0, self.GRID / 2.0)
+        painter.scale(swell, swell)
+        painter.translate(-self.GRID / 2.0, -self.GRID / 2.0)
+
+    def _paint_package(self, painter, progress, color):
+        self._spring(painter, progress, 0.75)
+        painter.setPen(round_pen(self.faint(color), 1.6))
+        _paint_box(painter, 1.0, 1.0)
+        painter.setPen(round_pen(color, 1.9))
+        _paint_box(painter, ease_out(_span(progress, 0.0, 0.6)), ease_out(_span(progress, 0.45, 0.8)))
+
+    def _paint_up_to_date(self, painter, progress, color):
+        self._spring(painter, progress, 0.7)
+        ring = QtCore.QRectF(2, 2, 20, 20)
+        painter.setPen(round_pen(self.faint(color), 1.6))
+        painter.drawEllipse(ring)
+        painter.setPen(round_pen(color, 1.9))
+        painter.drawArc(ring, 90 * 16, int(-360.0 * ease_out(_span(progress, 0.0, 0.5)) * 16))
+        tick = ease_out(_span(progress, 0.42, 0.75))
+        _polyline(painter, partial_line(((8.5, 12.0), (11.0, 14.5), (15.5, 9.5)), tick))
+
+    def _paint_not_found(self, painter, progress, color):
+        _paint_magnifier(painter, self.faint(color), 1.6, 1.0, 1.0)
+        shake = _span(progress, 0.5, 1.0)
+        painter.translate(math.sin(shake * math.pi * 4) * 1.6 * (1.0 - shake), 0)
+        lens, handle = ease_out(_span(progress, 0.0, 0.38)), ease_out(_span(progress, 0.3, 0.48))
+        _paint_magnifier(painter, color, 1.9, lens, handle)
+
+    def _paint_cloud_off(self, painter, progress, color):
+        # The line cuts a gap into the cloud as it grows, which ends as Lucide's "cloud-off".
+        cut = ease_out(_span(progress, 0.5, 0.85))
+        end = QtCore.QPointF(1 + 22 * cut, 1 + 22 * cut)
+        if cut > 0:
+            line = QtGui.QPainterPath(QtCore.QPointF(1, 1))
+            line.lineTo(end)
+            stroker = QtGui.QPainterPathStroker()
+            stroker.setWidth(4.2)
+            stroker.setCapStyle(Qt.RoundCap)
+            canvas = QtGui.QPainterPath()
+            canvas.addRect(QtCore.QRectF(-1, -1, self.GRID + 2, self.GRID + 2))
+            painter.setClipPath(canvas.subtracted(stroker.createStroke(line)))
+        cloud = QtGui.QPainterPath(QtCore.QPointF(18, 20))
+        cloud.lineTo(9, 20)
+        cloud.arcTo(QtCore.QRectF(1, 4, 16, 16), 270, -255.5)
+        cloud.lineTo(18, 10)
+        cloud.arcTo(QtCore.QRectF(13, 10, 10, 10), 90, -180)
+        painter.setPen(round_pen(self.faint(color), 1.6))
+        painter.drawPath(cloud)
+        drawn = ease_out(_span(progress, 0.0, 0.55))
+        painter.setPen(round_pen(color, 1.9))
+        steps = max(2, int(64 * drawn))
+        points = [cloud.pointAtPercent(drawn * index / float(steps)) for index in range(steps + 1)]
+        painter.drawPolyline(QtGui.QPolygonF(points))
+        painter.setClipping(False)
+        if cut > 0:
+            painter.drawLine(QtCore.QPointF(1, 1), end)
+
+
+class StatePanel(QtWidgets.QFrame):
+    """Centered empty/error state: icon, title, text and an optional action button. `glyph` replaces the icon with
+    a widget of its own (the animated SearchingIcon while something loads)."""
+
+    def __init__(self, themes, icon_name, title, text, action_text="", action_icon="", glyph=None, parent=None):
         QtWidgets.QFrame.__init__(self, parent)
         self.setObjectName("StatePanel")
         self.setFixedWidth(430)
-        glyph = IconLabel(icon_name, themes, "iconMuted", 42)
+        glyph = glyph or IconLabel(icon_name, themes, "iconMuted", 42)
         self.title = label(title, "StateTitle")
         self.text = label(text, "StateText", wrap=True)
         for widget in (self.title, self.text):
@@ -548,12 +778,14 @@ class SlideView(QtWidgets.QWidget):
     FAILED_TEXT = "This screenshot could not be loaded."
 
     def __init__(self, count, pixmap_for, themes, radius=0, inset=2, dismissible=False, failed_for=None,
-                 parent=None):
+                 loop=True, parent=None):
         """radius: rounded clip of the frame; inset: side margin each image is fitted into (slides still cross
         the whole widget); dismissible: drag the image up or down to close (the lightbox); failed_for(index): True
-        when that image will not come, so a message replaces the endless preloader."""
+        when that image will not come, so a message replaces the endless preloader; loop=False stops at the first
+        and the last image (description galleries, like maxpkg.dev)."""
         QtWidgets.QWidget.__init__(self, parent)
         self.failed_for = failed_for
+        self.loop = loop
         self._current_rect = QtCore.QRectF()  # where the current image (or its message) was painted
         self.lift = 0.0  # vertical offset of the dragged image
         self._lift_animation = QtCore.QVariantAnimation(self)
@@ -633,9 +865,12 @@ class SlideView(QtWidgets.QWidget):
         self.update()
         self.index_changed.emit(self.index)
 
+    def _reachable(self, step):
+        return self.loop or 0 <= self.index + step < self.count
+
     def slide(self, step):
         """Animate to the next (+1) or previous (-1) image."""
-        if self.count < 2:
+        if self.count < 2 or not self._reachable(step):
             return
         if self._animation.state() == QtCore.QAbstractAnimation.Running:
             self._animation.stop()
@@ -662,12 +897,15 @@ class SlideView(QtWidgets.QWidget):
         if self.count < 2:
             return
         self._animation.stop()
+        if not self._reachable(-1 if delta > 0 else 1):
+            delta *= 0.25  # past the first or last image: the drag only stretches a little and springs back
         self._set_offset(max(-self._span(), min(self._span(), delta)))
 
     def _on_release(self, delta):
         if self.count < 2:
             return
-        self._animate_to(0 if abs(delta) < SWIPE_DISTANCE else (1 if delta < 0 else -1))
+        step = 0 if abs(delta) < SWIPE_DISTANCE else (1 if delta < 0 else -1)
+        self._animate_to(step if self._reachable(step) else 0)
 
     def _settle(self):
         step, self._target_step = self._target_step, 0
@@ -729,6 +967,8 @@ class SlideView(QtWidgets.QWidget):
         for step in neighbours:
             left = area.left() + step * self._span() + self.offset
             if left - self.inset >= frame.right() or left + area.width() + self.inset <= frame.left():
+                continue
+            if not self._reachable(step):
                 continue
             position = (self.index + step) % self.count
             pixmap = self._scaled_pixmap(position, size)

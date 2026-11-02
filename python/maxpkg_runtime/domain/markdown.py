@@ -4,7 +4,8 @@ Covers what the site's editor produces and what GitHub-style descriptions use:
 - blocks: headings (# to ###### and setext), paragraphs (every newline is a line break), nested ordered/unordered lists,
   task lists, block quotes, fenced code (``` and ~~~), horizontal rules and pipe tables with alignment;
 - inline: **bold**/__bold__, *italic*/_italic_, ~~strike~~, `code`, [links](url "title"), <autolinks>, bare
-  URLs, ![images](url) (shown as links: QTextBrowser does not fetch remote images) and backslash escapes.
+  URLs, ![images](url) inside a sentence (shown as links: QTextBrowser does not fetch remote images) and
+  backslash escapes. Pictures on lines of their own are split off by split_media() and shown as images.
 
 All text is HTML-escaped; links keep only http(s), mailto and site-relative targets (maxpkg.dev).
 """
@@ -35,6 +36,48 @@ _TASK = re.compile(r"^\[([ xX])\]\s+(.*)$")
 _TABLE_SEPARATOR = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
 
 
+PICTURE_LINK = "maxpkg-picture:"  # href of an inline picture: maxpkg-picture:<position in the description>
+
+
+def cdn_origin(site):
+    """The content CDN of a maxpkg.dev environment: https://maxpkg.dev -> https://cdn.maxpkg.dev,
+    https://dev.maxpkg.dev -> https://cdn-dev.maxpkg.dev."""
+    match = re.match(r"^https?://([^/:]+)", site or "")
+    host = match.group(1).lower() if match else "maxpkg.dev"
+    labels = host.split(".")
+    if len(labels) > 2:  # an environment such as dev.maxpkg.dev
+        return "https://cdn-" + labels[0] + "." + ".".join(labels[1:])
+    return "https://cdn." + host
+
+
+class Pictures:
+    """The pictures of one description: which links may be loaded, and their positions in document order.
+
+    Like maxpkg.dev, a picture loads only from the content CDN of the service's environment over https, or from a
+    site-relative path ("/...", not "//...") on the service's own origin; any other picture shows its alt text and is
+    never requested. `items` lists (alt, url) in document order, including gallery pictures: a lightbox walks them
+    by position, since the same picture may appear twice.
+    """
+
+    def __init__(self, site=SITE, cdn=None):
+        self.site = site.rstrip("/")
+        self.cdn = (cdn or cdn_origin(site)).rstrip("/").lower()
+        self.items = []
+
+    def resolve(self, target):
+        """The URL to load, or '' when the picture must not be loaded."""
+        target = target.strip()
+        if target.startswith("/") and not target.startswith("//"):
+            return self.site + target
+        if self.cdn.startswith("https://") and target.lower().startswith(self.cdn + "/"):
+            return target
+        return ""
+
+    def add(self, alt, url):
+        self.items.append((alt, url))
+        return len(self.items) - 1
+
+
 def safe_href(target):
     target = target.strip()
     if re.match(r"^(https?://|mailto:)", target, re.I):
@@ -44,8 +87,9 @@ def safe_href(target):
     return ""
 
 
-def inline(text):
-    """One line (or a joined paragraph) of inline Markdown to HTML."""
+def inline(text, pictures=None):
+    """One line (or a joined paragraph) of inline Markdown to HTML. With `pictures`, an allowed picture becomes an
+    <img> inside a maxpkg-picture:<position> link; any other picture is its alt text."""
     stash = []
 
     def keep(fragment):
@@ -62,7 +106,15 @@ def inline(text):
     # Escapes and code spans first: nothing inside them is Markdown.
     text = re.sub(r"\\([" + re.escape(_ESCAPABLE) + "])", lambda match: keep(html.escape(match.group(1))), text)
     text = _CODE.sub(lambda match: keep("<code>" + html.escape(match.group(2).strip()) + "</code>"), text)
-    text = _IMAGE.sub(lambda match: link(html.escape(match.group(1) or "Image"), match.group(2)), text)
+    def picture(match):
+        alt = match.group(1).strip()
+        url = pictures.resolve(match.group(2)) if pictures is not None else ""
+        if not url:
+            return keep(html.escape(alt))
+        return keep('<a href="{}{}"><img src="{}" alt="{}"></a>'.format(
+            PICTURE_LINK, pictures.add(alt, url), html.escape(url), html.escape(alt)))
+
+    text = _IMAGE.sub(picture, text)
     text = _LINK.sub(lambda match: link(match.group(1), match.group(2), match.group(3) or ""), text)
     text = _AUTOLINK.sub(lambda match: link(html.escape(match.group(1)), match.group(1)), text)
     text = _BARE_URL.sub(lambda match: link(html.escape(match.group(1)), match.group(1)), text)
@@ -76,7 +128,7 @@ def inline(text):
     return text
 
 
-def _paragraph_html(lines):
+def _paragraph_html(lines, pictures=None):
     """Lines of one paragraph, each on its own line, as on maxpkg.dev.
 
     The runtime API drops blank lines from descriptions, so a single newline is often the author's paragraph
@@ -87,7 +139,7 @@ def _paragraph_html(lines):
         content = line.strip()
         if content.endswith("\\") and not content.endswith("\\\\"):
             content = content[:-1].rstrip()  # backslash hard break: the line break is already there
-        parts.append(inline(content))
+        parts.append(inline(content, pictures))
     return "<br>".join(parts)
 
 
@@ -109,7 +161,7 @@ def _split_row(line):
     return cells
 
 
-def _table(header, separator, rows):
+def _table(header, separator, rows, pictures=None):
     aligns = []
     for cell in _split_row(separator):
         left, right = cell.startswith(":"), cell.endswith(":")
@@ -118,7 +170,7 @@ def _table(header, separator, rows):
 
     def cells(row, tag):
         values = (_split_row(row) + [""] * columns)[:columns]
-        return "".join('<{0} align="{1}">{2}</{0}>'.format(tag, aligns[index], inline(value))
+        return "".join('<{0} align="{1}">{2}</{0}>'.format(tag, aligns[index], inline(value, pictures))
                        for index, value in enumerate(values))
 
     body = "".join("<tr>" + cells(row, "td") + "</tr>" for row in rows)
@@ -131,7 +183,7 @@ def _is_table_start(lines, index):
             and "-" in lines[index + 1])
 
 
-def _list_html(lines, index):
+def _list_html(lines, index, pictures=None):
     """Parse a (possibly nested) list starting at `index`. Returns (html, next index)."""
     output = []
     stack = []  # [(indent, tag, item open)]
@@ -152,7 +204,7 @@ def _list_html(lines, index):
                     continue
                 break
             if stack and (line.startswith(" ") or line.startswith("\t")) and not _FENCE.match(line):
-                output.append(" " + inline(line.strip()))  # continuation of the current item
+                output.append(" " + inline(line.strip(), pictures))  # continuation of the current item
                 index += 1
                 continue
             break
@@ -177,23 +229,73 @@ def _list_html(lines, index):
         if task:
             box = "☑" if task.group(1).lower() == "x" else "☐"  # ballot box with / without check
             text = task.group(2)
-            output.append("<li>" + box + " " + inline(text))
+            output.append("<li>" + box + " " + inline(text, pictures))
         else:
-            output.append("<li>" + inline(text))
+            output.append("<li>" + inline(text, pictures))
         index += 1
     while stack:
         output.append("</li></{}>".format(stack.pop()[1]))
     return "".join(output), index
 
 
-def to_html(source):
+def image_line(line, pictures):
+    """[(alt, url)] when a line holds only pictures that may be loaded, else []: the line stays text, where a
+    picture that may not be loaded shows its alt text."""
+    rest = _IMAGE.sub("", line).strip()
+    if rest or not _IMAGE.search(line):
+        return []
+    found = []
+    for match in _IMAGE.finditer(line):
+        url = pictures.resolve(match.group(2))
+        if not url:
+            return []
+        found.append((match.group(1).strip(), url))
+    return found
+
+
+def split_media(source, pictures):
+    """Description Markdown in reading order as ("text", markdown) and ("images", [(alt, url)]) blocks.
+
+    Like maxpkg.dev (its MarkdownRenderer), pictures on lines of their own become image blocks: pictures on
+    consecutive lines are one gallery, a single one stands alone, and a blank line ends a gallery. Pictures inside a
+    sentence and in code blocks stay in the text.
+    """
+    blocks = []
+    text = []
+    fence = None
+    for line in (source or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        marker = _FENCE.match(line)
+        if fence is None and marker:
+            fence = marker.group(1)
+        elif fence is not None and line.strip().startswith(fence):
+            fence = None
+        found = image_line(line, pictures) if fence is None and not marker else []
+        if not found:
+            text.append(line)
+            continue
+        if text:
+            if any(part.strip() for part in text):
+                blocks.append(("text", "\n".join(text)))
+            else:
+                blocks.append(("break", ""))  # a blank line between pictures: the next ones start a new gallery
+        text = []
+        if blocks and blocks[-1][0] == "images":
+            blocks[-1][1].extend(found)
+        else:
+            blocks.append(("images", found))
+    if any(part.strip() for part in text):
+        blocks.append(("text", "\n".join(text)))
+    return [block for block in blocks if block[0] != "break"]
+
+
+def to_html(source, pictures=None):
     lines = (source or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
     output = []
     paragraph = []
 
     def flush():
         if paragraph:
-            output.append("<p>" + _paragraph_html(paragraph) + "</p>")
+            output.append("<p>" + _paragraph_html(paragraph, pictures) + "</p>")
             del paragraph[:]
 
     index = 0
@@ -219,7 +321,7 @@ def to_html(source):
         setext = _SETEXT.match(line)
         if setext and paragraph and len(paragraph) == 1:
             level = 3 if setext.group(1).startswith("=") else 4
-            output.append("<h{0}>{1}</h{0}>".format(level, inline(paragraph[0].strip())))
+            output.append("<h{0}>{1}</h{0}>".format(level, inline(paragraph[0].strip(), pictures)))
             del paragraph[:]
             index += 1
             continue
@@ -232,7 +334,7 @@ def to_html(source):
         if heading:
             flush()
             level = min(6, len(heading.group(1)) + 2)  # # -> h3: the page title is the package name
-            output.append("<h{0}>{1}</h{0}>".format(level, inline(heading.group(2))))
+            output.append("<h{0}>{1}</h{0}>".format(level, inline(heading.group(2), pictures)))
             index += 1
             continue
         if _is_table_start(lines, index):
@@ -243,7 +345,7 @@ def to_html(source):
             while index < len(lines) and lines[index].strip() and "|" in lines[index]:
                 rows.append(lines[index])
                 index += 1
-            output.append(_table(header, separator, rows))
+            output.append(_table(header, separator, rows, pictures))
             continue
         if stripped.startswith(">"):
             flush()
@@ -251,11 +353,11 @@ def to_html(source):
             while index < len(lines) and lines[index].strip().startswith(">"):
                 quote.append(re.sub(r"^\s*>\s?", "", lines[index]))
                 index += 1
-            output.append("<blockquote>" + to_html("\n".join(quote)) + "</blockquote>")
+            output.append("<blockquote>" + to_html("\n".join(quote), pictures) + "</blockquote>")
             continue
         if _LIST_ITEM.match(line) and not paragraph:
             flush()
-            block, index = _list_html(lines, index)
+            block, index = _list_html(lines, index, pictures)
             output.append(block)
             continue
         if _LIST_ITEM.match(line) and paragraph:
