@@ -4,6 +4,7 @@
 
 - Added: The Updates tab count turns red while updates are pending.
 - Added: Settings > Storage shows how much the image cache takes and lets you open its folder or clear it.
+- Added: View Logs at the bottom left opens the log of any day, with info, success, warning and error records in their colours, filters and search.
 - Fixed: The Changelog tab in package details counts versions, not single changes.
 - Fixed: A screenshot that cannot be loaded shows a message instead of an endless spinner and is tried again when the viewer opens.
 - Changed: The screenshot viewer closes on a click beside the screenshot, and its close button matches the Manager window's.
