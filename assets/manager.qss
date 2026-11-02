@@ -51,6 +51,8 @@ QPushButton#MiniTitle:pressed { background: @borderDefault; }
 #StatusBar QLabel[tone="warning"] { color: @warning; }
 #StatusLink { color: @successText; font-size: 11px; border: none; background: transparent; padding: 0 2px; }
 #StatusLink:hover { color: @accentHover; }
+#StatusAction { color: @textMuted; font-size: 11px; border: none; background: transparent; padding: 0 2px; }
+#StatusAction:hover { color: @textStrong; }
 
 QScrollArea, QScrollArea > QWidget > QWidget#PageCanvas { background: transparent; border: none; }
 /* The thumbnail strip sits on its section: viewport and content stay see-through. */
@@ -303,6 +305,11 @@ QPushButton#Segment {
 QPushButton#Segment:hover { border-color: @borderStrong; background: @surfaceHover; color: @textStrong; }
 QPushButton#Segment:checked { border-color: @borderFocus; background: @accentActive; color: @textStrong; }
 QPushButton#Segment:disabled { color: @textDisabled; }
+
+/* ---------- logs window ---------- */
+#LogFrame { border: 1px solid @borderSoft; border-radius: 10px; background: @backgroundWindow; }
+QTextEdit#LogView { border: none; background: transparent; selection-background-color: @accentActive; selection-color: @textStrong; }
+#LogSummary { color: @textMuted; font-size: 11px; }
 
 /* ---------- onboarding (welcome) window ---------- */
 #WelcomeHeader { background: transparent; border-bottom: 1px solid @borderSoft; }

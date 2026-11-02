@@ -133,7 +133,7 @@ class ImageService(QtCore.QObject):
         Returns (removed, bytes freed)."""
         self._failed.clear()
         removed, freed = storage.clear_folder(self._folder)
-        log.info("images", "Image cache cleared: {} files, {} bytes".format(removed, freed))
+        log.success("images", "Image cache cleared: {} files, {} bytes".format(removed, freed))
         return removed, freed
 
     def prune_disk(self):

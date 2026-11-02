@@ -266,6 +266,14 @@ class Runtime(QtCore.QObject):
         package = self.package(reference)
         return package is not None and max_api.open_folder(package.install_path)
 
+    def open_logs(self):
+        """Explorer on the log folder (one file per day)."""
+        try:
+            os.makedirs(self.paths.logs, exist_ok=True)
+        except OSError:
+            return False
+        return max_api.open_folder(self.paths.logs)
+
     def open_image_cache(self):
         """Explorer on the image cache; the folder is created first, so it opens before any picture is cached."""
         try:
@@ -499,6 +507,8 @@ class Runtime(QtCore.QObject):
         def failed(error):
             self._finish()
             message = error.message if isinstance(error, api.ApiError) else network.describe(error)
+            log.error("installer", "{} could not be {}: {}".format(fallback_name, "updated" if updating else "installed",
+                                                                   message))
             self.say("{} could not be {}.\n{}".format(fallback_name, "updated" if updating else "installed", message),
                      "error", retry)
             if on_done:
@@ -552,13 +562,17 @@ class Runtime(QtCore.QObject):
                     old = previous.version if previous is not None else ""
                     new = package.version if package else ""
                     versions = "{} → {}".format(old, new) if old and new and old != new else (new and "Version " + new)
+                    log.success("installer", "Updated {}{}".format(label, " " + versions if versions else ""))
                     self.say("{} was updated.".format(label) + ("\n" + versions if versions else ""), "success", run)
                 else:
                     on_toolbar = (package is not None and self.settings.toolbar_visible
                                   and self.is_on_toolbar(package))
+                    log.success("installer", "Installed {}{}".format(label, " " + package.version if package else ""))
                     self.say(label + " was installed." + ("\nIt is on the toolbar now." if on_toolbar else ""),
                              "success", run)
             else:
+                log.error("installer", label + (" could not be updated or verified." if updating else
+                                                " could not be installed or verified."))
                 self.say(label + (" could not be updated or verified." if updating else
                                   " could not be installed or verified."), "error", retry)
             if on_done:
@@ -615,9 +629,11 @@ class Runtime(QtCore.QObject):
             self._finish()
         if ok and self.package(package.guid) is None:
             guid = package.guid
+            log.success("uninstaller", "Removed {} {}".format(package.display_name, package.version))
             self.say(package.display_name + " was removed.\nYour scenes are not changed.", "success",
                      [("Reinstall", "download", lambda: self.install(guid))])
             return True
+        log.error("uninstaller", package.display_name + " could not be removed." + (" " + message if message else ""))
         self.say(package.display_name + " could not be removed." + ("\n" + message if message else ""), "error")
         return False
 

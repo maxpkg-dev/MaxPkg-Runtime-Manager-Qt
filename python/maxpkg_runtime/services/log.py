@@ -37,6 +37,11 @@ def info(area, message):
     _write("INFO", area, message)
 
 
+def success(area, message):
+    """A finished step the user asked for (installed, updated, removed); the log viewer shows it in green."""
+    _write("SUCCESS", area, message)
+
+
 def warning(area, message):
     _write("WARN", area, message)
 

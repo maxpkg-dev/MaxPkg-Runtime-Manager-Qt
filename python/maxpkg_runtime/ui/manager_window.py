@@ -16,6 +16,7 @@ from .dialogs import ask_support, confirm
 from .frame import (EDGE, WindowChrome, apply_native_frame, bounded_position, glass_border, native_event,
                     paint_window_shape, prepare_window)
 from .pages import WIDE_DISCOVER, DiscoverPage, InstalledPage
+from .log_window import LogWindow
 from .settings_panel import SettingsPanel
 from .widgets import (BrandLogo, Button, ClearableDropdown, IconButton, IconLabel, SearchBox, SlideView, add_action,
                       add_danger_action, add_menu_title, hbox, label, repolish, themed_menu, vbox)
@@ -814,6 +815,11 @@ class ManagerWindow(QtWidgets.QWidget):
         status = QtWidgets.QFrame()
         status.setObjectName("StatusBar")
         status.setFixedHeight(28)
+        self.logs_link = QtWidgets.QPushButton("View Logs")
+        self.logs_link.setObjectName("StatusAction")
+        self.logs_link.setCursor(Qt.PointingHandCursor)
+        self.logs_link.setToolTip("See what the Package Manager did: installs, updates, warnings and errors")
+        themes.bind_icon(self.logs_link, "logs", "iconMuted", 12)
         self.package_status = label("0 packages")
         self.update_status = label("0 updates")
         self.website = QtWidgets.QPushButton("maxpkg.dev")
@@ -824,7 +830,7 @@ class ManagerWindow(QtWidgets.QWidget):
         themes.bind_icon(self.website, "external-link", "successText", 11)
         self.footer_version = label("Package Manager " + self.runtime.version)
         self.connection_status = label("Offline")
-        status.setLayout(hbox(self.package_status, 12, self.update_status, None, self.website, None,
+        status.setLayout(hbox(self.logs_link, 14, self.package_status, 12, self.update_status, None, self.website, None,
                               self.footer_version, 14, self.connection_status, spacing=0, margins=(14, 0, 14, 0)))
 
         self.content = QtWidgets.QWidget()
@@ -848,6 +854,7 @@ class ManagerWindow(QtWidgets.QWidget):
         self._busy_timer.timeout.connect(self._hide_busy)
         self.settings_panel = SettingsPanel(self, self)
         self.settings_panel.uninstall_requested.connect(self._runtime_uninstall)
+        self.log_window = None  # built on the first View Logs
 
     def _connect(self):
         runtime = self.runtime
@@ -859,6 +866,7 @@ class ManagerWindow(QtWidgets.QWidget):
         self.check_button.clicked.connect(lambda: runtime.check_updates(True))
         self.update_all_button.clicked.connect(runtime.update_all)
         self.website.clicked.connect(lambda: runtime.open_catalog())  # the site's catalog, not its home page
+        self.logs_link.clicked.connect(self.open_logs)
         self.search.textChanged.connect(self._on_search)
         self.search.returnPressed.connect(self._run_discover_search)
         self.category.changed.connect(self.select_category)
@@ -917,6 +925,8 @@ class ManagerWindow(QtWidgets.QWidget):
                 signal.disconnect(slot)
             except (RuntimeError, TypeError):
                 pass
+        if self.log_window is not None:
+            self.log_window.dispose()
 
     # --- lifecycle ------------------------------------------------------------------
     def start(self, tab="", settings_page=""):
@@ -990,6 +1000,8 @@ class ManagerWindow(QtWidgets.QWidget):
     def before_collapse(self):
         if self.settings_panel.isVisible():
             self.settings_panel.close_panel()
+        if self.log_window is not None and self.log_window.isVisible():
+            self.log_window.close_window()
 
     def content_rect(self):
         return self.content.geometry()
@@ -1122,6 +1134,11 @@ class ManagerWindow(QtWidgets.QWidget):
 
     def open_settings(self, page=""):
         self.settings_panel.open_page(page)
+
+    def open_logs(self):
+        if self.log_window is None:
+            self.log_window = LogWindow(self, self)
+        self.log_window.open_window()
 
     def ask_support(self):
         """Header heart: why MaxPkg needs donations; Donate opens the donation page in the browser."""

@@ -26,6 +26,7 @@ class Segments(QtWidgets.QWidget):
     def __init__(self, options, parent=None):
         QtWidgets.QWidget.__init__(self, parent)
         self.buttons = {}
+        self.current = ""
         layout = QtWidgets.QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(5)
@@ -45,6 +46,7 @@ class Segments(QtWidgets.QWidget):
         self.changed.emit(value)
 
     def set_value(self, value):
+        self.current = value
         for key, button in self.buttons.items():
             button.setChecked(key == value)
 

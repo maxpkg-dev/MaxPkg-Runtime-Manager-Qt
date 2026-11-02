@@ -83,7 +83,7 @@ class Controller:
             self.open_manager("")
         if welcome:
             self.show_welcome()
-        log.info("startup", "Runtime started ({})".format(qt_compat.binding_info()))
+        log.success("startup", "Runtime started ({})".format(qt_compat.binding_info()))
 
     def show_welcome(self):
         if not self.running:
