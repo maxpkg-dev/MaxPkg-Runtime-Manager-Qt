@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.2
+
+- Added: Check Updates also checks the Package Manager itself and installs a newer version right away, or as soon as a running package operation ends. One message tells both results, and a failed check never hides the other one.
+- Added: The toolbar's MaxPkg menu has Check Manager Updates, which checks and installs only the Package Manager.
+- Added: When the Package Manager cannot update itself, its message offers Download manually, which opens the latest release on GitHub.
+- Fixed: When the Package Manager's update check could not reach GitHub, nothing was said.
+- Fixed: Notifications with two buttons could cut off their text; a button that does not fit now goes to the next line.
+- Fixed: Notifications in the screen corner had an empty strip under two or three lines of text.
+- Changed: A script removed from the toolbar fades while a glowing line wipes it away from right to left, and its place closes smoothly.
+
 ## 2.1.1
 
 - Fixed: In 3ds Max 2025 and newer, the Package Manager could not update itself: GitHub serves release files through a redirect that was not followed, so the download came back empty. Versions 2.0.9 and 2.1.0 on these 3ds Max versions need this release installed by hand once.
