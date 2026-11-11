@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.1
+
+- Fixed: In 3ds Max 2025 and newer, the Package Manager could not update itself: GitHub serves release files through a redirect that was not followed, so the download came back empty. Versions 2.0.9 and 2.1.0 on these 3ds Max versions need this release installed by hand once.
+
 ## 2.1.0
 
 - Added: The toolbar lights up when it appears, moves or changes its look, so it is easy to find. A newly installed script's button gets rings around it, and a removed one shrinks away before its place closes.
