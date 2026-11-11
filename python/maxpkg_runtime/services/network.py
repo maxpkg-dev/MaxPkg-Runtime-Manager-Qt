@@ -48,6 +48,11 @@ def describe(error):
     return without_links(str(error)) or error.__class__.__name__
 
 
+def _enum_number(value):
+    """A Qt enum as the plain int a QVariant attribute needs, in PySide2 and PySide6 alike."""
+    return int(getattr(value, "value", value))
+
+
 def curl_executable():
     """Windows 10 1803+ ships curl.exe in System32; an empty string when it is missing."""
     system_root = os.environ.get("SystemRoot") or os.environ.get("windir") or r"C:\Windows"
@@ -91,8 +96,10 @@ class NetworkService(QtCore.QObject):
         self._use_system_proxy(url)
         request = QtNetwork.QNetworkRequest(QtCore.QUrl(url))
         request.setRawHeader(b"User-Agent", USER_AGENT)
+        # As a number: PySide6 stores the enum object itself, Qt reads it as ManualRedirectPolicy and stops at GitHub's
+        # 302 to its asset server, so a release download came back empty.
         request.setAttribute(QtNetwork.QNetworkRequest.RedirectPolicyAttribute,
-                             QtNetwork.QNetworkRequest.NoLessSafeRedirectPolicy)
+                             _enum_number(QtNetwork.QNetworkRequest.NoLessSafeRedirectPolicy))
         if hasattr(request, "setTransferTimeout"):
             request.setTransferTimeout(TIMEOUT_MS)
         return request
@@ -182,6 +189,9 @@ class NetworkService(QtCore.QObject):
                 status = int(status) if status is not None else 0
                 if reply.error() != QtNetwork.QNetworkReply.NoError:
                     raise NetworkError(reply.errorString(), status if status >= 400 else 0)
+                if 300 <= status < 400:  # a redirect Qt did not follow: no answer yet, so curl gets to try
+                    status = 0
+                    raise NetworkError("Qt did not follow a redirect")
                 result = convert(bytes(reply.readAll()))
             except Exception as exception:  # noqa: BLE001 - reported to the caller
                 error = exception
