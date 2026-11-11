@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.0
+
+- Added: The toolbar lights up when it appears, moves or changes its look, so it is easy to find. A newly installed script's button gets rings around it, and a removed one shrinks away before its place closes.
+- Fixed: On screens with display scaling above 100%, icons on buttons with text were too small.
+
 ## 2.0.9
 
 - Fixed: Installing over the previous MaxPkg Runtime removes it only after the Package Manager has started; if it does not start, the previous Runtime keeps working.
