@@ -20,6 +20,7 @@ from .packages import is_newer, version_key
 REPOSITORY = "maxpkg-dev/MaxPkg-Runtime-Manager-Qt"
 RELEASES_URL = "https://api.github.com/repos/" + REPOSITORY + "/releases?per_page=15"
 DOWNLOAD_PREFIX = "https://github.com/" + REPOSITORY + "/releases/download/"  # nothing else is ever downloaded
+LATEST_RELEASE_URL = "https://github.com/" + REPOSITORY + "/releases/latest"  # a failed update: install it by hand
 PACKAGE_ASSET = "MaxPkg-Runtime-Manager-Qt.mzp"
 HASH_ASSET = "MaxPkg-Runtime-Manager-Qt.sha256"
 

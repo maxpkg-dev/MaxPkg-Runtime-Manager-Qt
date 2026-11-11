@@ -11,13 +11,14 @@ import shutil
 import stat
 import uuid
 
-from ..domain import api, integrity
+from ..domain import api, integrity, update_check
 from ..domain.packages import (DIVIDER, Package, compatible, incompatibility, is_divider, is_newer,
                                merge_visible_order, normalized_order, ordered_for_toolbar, read_mzp_manifest, scan,
                                supported_versions, toolbar_entries, with_brand_divider)
 from ..domain.settings import load_or_migrate
 from ..qt_compat import QtCore, Signal
 from . import log, max_api, network
+from . import self_update as manager_update
 from .self_update import SelfUpdater
 
 LEGACY_FOLDER = "MaxPkg-Runtime-Manager"
@@ -444,22 +445,100 @@ class Runtime(QtCore.QObject):
         return elapsed.total_seconds() >= self.settings.update_frequency_hours * 3600
 
     def check_updates(self, manual=True):
+        """The packages only: the automatic check after start (Check Updates uses check_all_updates)."""
         if self.checking_updates or not self.packages:
             if manual and not self.packages:
                 self.say("No installed packages to check.", "info")
             return False
         self.checking_updates = True
         self.updates_checking_changed.emit(True)
+
+        def done(result):
+            self.checking_updates = False
+            self.updates_checking_changed.emit(False)
+            if manual:
+                self._say_notice(update_check.summarize(result,
+                                                        update_check.ManagerResult(update_check.MANAGER_SKIPPED)))
+
+        self._check_packages(done)
+        return True
+
+    def check_all_updates(self):
+        """Check Updates (the Manager's header and the toolbar menu): the packages and the Package Manager itself at
+        the same time, then one message for both. A newer Package Manager is installed right away, or as soon as the
+        running package operation ends. False when a check already runs."""
+        if self._stopped or self.checking_updates:
+            return False
+        self.checking_updates = True  # "Checking updates..." until both answers are in
+        self.updates_checking_changed.emit(True)
+        results = {}
+
+        def finished(part, result):
+            results[part] = result
+            if len(results) < 2 or self._stopped:
+                return
+            self.checking_updates = False
+            self.updates_checking_changed.emit(False)
+            self._finish_check(results["packages"], results["manager"])
+
+        # A Package Manager update that already runs (download, restart) has its own messages: only packages then.
+        if not self.self_update.check(manual=True, report=lambda status: finished("manager", status)):
+            finished("manager", "")
+        if self.packages:
+            self._check_packages(lambda result: finished("packages", result))
+        else:
+            finished("packages", update_check.PackagesResult(update_check.PACKAGES_NONE))
+        return True
+
+    def check_manager_update(self):
+        """Check Manager Updates (the toolbar menu): the Package Manager alone. A newer version is installed the same
+        way as by Check Updates. False when a Package Manager check or update already runs."""
+        if self._stopped:
+            return False
+        skipped = update_check.PackagesResult(update_check.PACKAGES_SKIPPED)
+        return self.self_update.check(
+            manual=True, report=lambda status: self._finish_check(skipped, status, retry=self.check_manager_update))
+
+    def _finish_check(self, packages, manager_status, retry=None):
+        """Both answers of Check Updates are in: install a newer Package Manager (now, or after the running package
+        operation) and say the result once. `retry`: what Try Again runs (Check Updates by default)."""
+        updater = self.self_update
+        update = updater.available
+        if manager_status == manager_update.CURRENT:
+            manager = update_check.ManagerResult(update_check.MANAGER_CURRENT, self.version)
+        elif manager_status == manager_update.FAILED:
+            manager = update_check.ManagerResult(update_check.MANAGER_FAILED)
+        elif manager_status == manager_update.AVAILABLE and update is not None:
+            if not updater.can_install():
+                status = update_check.MANAGER_SOURCE
+            elif updater.busy_with_packages():
+                status = update_check.MANAGER_WAIT
+            else:
+                status = update_check.MANAGER_INSTALL
+            manager = update_check.ManagerResult(status, update.version)
+        else:
+            manager = update_check.ManagerResult(update_check.MANAGER_SKIPPED)
+        if manager.status == update_check.MANAGER_INSTALL:
+            log.info("self-update", "Check Updates installs Package Manager " + update.version)
+            if not updater.install():
+                manager = update_check.ManagerResult(update_check.MANAGER_SKIPPED)
+        elif manager.status == update_check.MANAGER_WAIT:
+            log.info("self-update", "Package Manager {} waits for the running package operation".format(update.version))
+            updater.install_when_idle()
+        # After install() began: the toast lies above the Manager's busy card, not under it.
+        self._say_notice(update_check.summarize(packages, manager), retry)
+
+    def _check_packages(self, on_result):
+        """Ask the service for newer package versions, keep the answer (settings cache, the packages' update links)
+        and hand on_result an update_check.PackagesResult."""
         max_year = self.max_year
 
         def done(remote, error):
-            self.checking_updates = False
-            self.updates_checking_changed.emit(False)
+            if self._stopped:
+                return
             if error is not None:
                 log.warning("updater", "Update check failed: " + network.describe(error))
-                if manual:
-                    self.say("The package update check failed.\nThe previous result is still available.", "error",
-                             [("Try Again", "refresh-cw", lambda: self.check_updates(True))])
+                on_result(update_check.PackagesResult(update_check.PACKAGES_FAILED))
                 return
             cache = []
             for package in self.packages:
@@ -473,28 +552,26 @@ class Runtime(QtCore.QObject):
             self.save_settings("updates")
             self._apply_known_updates()
             self.packages_changed.emit()
-            if manual:
-                self._offer_updates()
+            on_result(update_check.PackagesResult(update_check.PACKAGES_CHECKED, self._pending_updates()))
 
         self._post(api.updates_request(self.packages, max_year, self.version, self.api_channel),
                    lambda text: api.parse_updates(text, max_year), done)
-        return True
 
-    def _offer_updates(self):
-        """The result of a manual check, with the update right on the toast."""
-        pending = [package for package in self.packages if package.update_available]
-        if not pending:
-            self.say("All packages are up to date.", "success")
-        elif len(pending) == 1:
-            package = pending[0]
-            self.say("An update is available.\n{} {} → {}".format(package.display_name, package.version,
-                                                                        package.latest_version), "info",
-                     [("Update", "download", lambda: self.update(package.guid))])
-        else:
-            names = ", ".join(package.display_name for package in pending[:3]) + (
-                " and {} more".format(len(pending) - 3) if len(pending) > 3 else "")
-            self.say("{} updates are available.\n{}".format(len(pending), names), "info",
-                     [("Update All", "download", self.update_all)])
+    def _pending_updates(self):
+        return [(package.display_name, package.version, package.latest_version)
+                for package in self.packages if package.update_available]
+
+    def say_self_updated(self):
+        """After the Package Manager restarted on a new version: say so, with the package updates already known."""
+        self._say_notice(update_check.updated_notice(self.version, self._pending_updates()))
+
+    def _say_notice(self, notice, retry=None):
+        """An update_check.Notice as a toast; its action names become buttons. `retry`: Try Again (Check Updates)."""
+        guids = [package.guid for package in self.packages if package.update_available]
+        buttons = {update_check.UPDATE: ("Update", "download", lambda: self.update(guids[0]) if guids else False),
+                   update_check.UPDATE_ALL: ("Update All", "download", self.update_all),
+                   update_check.RETRY: ("Try Again", "refresh-cw", retry or self.check_all_updates)}
+        self.say(notice.text, notice.kind, [buttons[name] for name in notice.actions])
 
     # ----------------------------------------------------------------- critical operations
     def _begin(self, message):

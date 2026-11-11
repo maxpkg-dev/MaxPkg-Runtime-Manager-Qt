@@ -109,7 +109,8 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         self.brand_icon = brand_icon
         self.badge_count = 0
         self.locked = False  # Toolbar lock: no drag reorder (set by ToolbarController)
-        self.vanished = False  # removed: it keeps its place, unpainted, while its picture shrinks away
+        self.vanished = False  # removed: it keeps its place, unpainted, while the laser erases its picture
+        self.closing = 1.0  # share of its place a removed button still takes while that place closes
         self.setFocusPolicy(Qt.NoFocus)
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_Hover)
@@ -139,7 +140,13 @@ class ToolbarButton(QtWidgets.QAbstractButton):
     def _size(self):
         style = self.style_info
         if not self.brand:
-            return QtCore.QSize(style.button)
+            size = QtCore.QSize(style.button)
+            if self.closing < 1.0:  # along the toolbar only: the line of buttons keeps its thickness
+                if style.vertical:
+                    size.setHeight(int(round(size.height() * self.closing)))
+                else:
+                    size.setWidth(int(round(size.width() * self.closing)))
+            return size
         size = style.brand_size()
         if self.badge_count:
             pill = self._badge_metrics()[2]
@@ -570,13 +577,17 @@ def _ease_in_out(value):
 class ToolbarGlow(QtWidgets.QWidget):
     """Draws the eye to the toolbar. When it appears, moves or changes its look: an accent wash that a bright band
     sweeps along once, then fades out. A new button: a softer wash and two expanding rings around it. A removed button:
-    a picture of it shrinks away in its still empty place; once the place closes, a short-lived line marks where it was.
+    a picture of it fades in its still empty place while a glowing laser line crosses it from its end to its start
+    (right to left; bottom to top on a vertical toolbar) and erases what it passed; the line stops where the place
+    closes and stays there a moment as the mark of where the button was.
     It covers the toolbar, never takes the mouse, and waits until the toolbar is on screen (3ds Max may still be
     starting)."""
 
     DURATION = 1600  # ms
     PULSE = 0.55  # share of the duration one ring takes
-    SHRINK = 0.4  # share of the duration a removed button takes to shrink away
+    ERASE = 0.4  # share of the duration the laser takes to erase a removed button
+    LASER_GLOW = 14.0  # px: the soft light around the laser line
+    LASER_CORE = "#eafff9"  # the line's hot middle
     STRONG, SOFT, NONE = 1.0, 0.55, 0.0  # strength of the wash: appeared, moved or restyled; a new button; a removed one
 
     def __init__(self, host):
@@ -688,28 +699,59 @@ class ToolbarGlow(QtWidgets.QWidget):
                     painter.setPen(QtGui.QPen(color, 2.5))
                     painter.setBrush(Qt.NoBrush)
                     painter.drawRoundedRect(ring.adjusted(-grow, -grow, grow, grow), 4 + grow, 4 + grow)
+        erase = min(1.0, x / self.ERASE)
+        wiped = _ease_in_out(erase)
         for picture, place in self.ghosts:
-            shrink = 1.0 - _ease_in_out(x / self.SHRINK)
-            if shrink <= 0.02:
-                continue
-            painter.save()
-            painter.setOpacity(shrink)
-            painter.translate(place.center())
-            painter.scale(shrink, shrink)
-            painter.rotate((1.0 - shrink) * 40.0)
-            painter.drawPixmap(QtCore.QRectF(-place.width() / 2, -place.height() / 2, place.width(), place.height()), picture,
-                               QtCore.QRectF(picture.rect()))
-            painter.restore()
+            first, last = (place.top(), place.bottom()) if self.vertical else (place.left(), place.right())
+            laser = last - (last - first) * wiped  # from the button's end to its start
+            if laser > first:
+                painter.save()
+                kept = (QtCore.QRectF(place.left(), first, place.width(), laser - first) if self.vertical
+                        else QtCore.QRectF(first, place.top(), laser - first, place.height()))
+                painter.setClipRect(kept)  # what the laser passed is gone
+                painter.setOpacity(1.0 - 0.7 * wiped)  # and the rest fades
+                painter.drawPixmap(place, picture, QtCore.QRectF(picture.rect()))
+                painter.restore()
+            across = (place.left(), place.width()) if self.vertical else (place.top(), place.height())
+            # It lights up as it starts and stays bright where it stops: the place closes then and the mark takes over
+            # (it only fades here when the place could not close).
+            after = (x - self.ERASE - 0.1) / 0.15
+            self._laser(painter, laser, across[0], across[1], min(1.0, erase / 0.12) * max(0.0, 1.0 - max(0.0, after)))
         for offset, start, length in self.gaps:
-            color = QtGui.QColor(accent)
-            color.setAlphaF(fade ** 1.5)
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(color)
-            if self.vertical:
-                painter.drawRoundedRect(QtCore.QRectF(start, offset - 1.5, length, 3), 1.5, 1.5)
-            else:
-                painter.drawRoundedRect(QtCore.QRectF(offset - 1.5, start, 3, length), 1.5, 1.5)
+            self._laser(painter, offset, start, length, fade ** 1.5)
         painter.end()
+
+    def _laser(self, painter, offset, start, length, strength):
+        """A glowing line across the toolbar at `offset` along it, `start`/`length` across it: the laser that erases a
+        removed button and the mark it leaves where the button was."""
+        if strength <= 0.0:
+            return
+        accent = QtGui.QColor(InsertionLine.ACCENT)
+
+        def area(along, along_size, across, across_size):
+            return (QtCore.QRectF(across, along, across_size, along_size) if self.vertical
+                    else QtCore.QRectF(along, across, along_size, across_size))
+
+        half = self.LASER_GLOW / 2.0
+        glow = (QtGui.QLinearGradient(0, offset - half, 0, offset + half) if self.vertical
+                else QtGui.QLinearGradient(offset - half, 0, offset + half, 0))
+        for stop, alpha in ((0.0, 0.0), (0.5, 0.5 * strength), (1.0, 0.0)):
+            color = QtGui.QColor(accent)
+            color.setAlphaF(alpha)
+            glow.setColorAt(stop, color)
+        painter.save()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QtGui.QBrush(glow))
+        painter.drawRoundedRect(area(offset - half, 2 * half, start - 2, length + 4), half, half)
+        core = QtGui.QColor(accent)
+        core.setAlphaF(strength)
+        painter.setBrush(core)
+        painter.drawRoundedRect(area(offset - 1.5, 3, start, length), 1.5, 1.5)
+        hot = QtGui.QColor(self.LASER_CORE)
+        hot.setAlphaF(0.9 * strength)
+        painter.setBrush(hot)
+        painter.drawRoundedRect(area(offset - 0.5, 1, start + 2, max(0.0, length - 4)), 0.5, 0.5)
+        painter.restore()
 
 
 class DockedStrip:
@@ -891,6 +933,8 @@ class ToolbarController(QtCore.QObject):
         self._glow = None
         self._look = None  # what the buttons looked like at the last sync: a change lights the toolbar up
         self._departing = {}  # guid -> (removed button still holding its place, guid of the button before it)
+        self._closing = []  # animations closing the places of removed buttons
+        self._closing_guids = set()
         runtime.packages_changed.connect(self.sync)
         runtime.settings_changed.connect(self._on_settings)
         themes.toolbar_changed.connect(self.sync)
@@ -922,6 +966,12 @@ class ToolbarController(QtCore.QObject):
         if is_valid(self.floating):
             self.floating.hide()
             self.floating.deleteLater()
+        for animation in self._closing:
+            if is_valid(animation):
+                animation.stop()
+                animation.deleteLater()
+        self._closing = []
+        self._closing_guids = set()
         self.toolbar = self.floating = self.strip = None
         self._buttons = {}
         self._dividers = []
@@ -998,18 +1048,18 @@ class ToolbarController(QtCore.QObject):
             if guid not in wanted_guids:
                 button = self._buttons.pop(guid)
                 ghost = self._picture_of(button)
-                if ghost is None:  # it was in the >> menu: nothing to shrink, the toolbar lights up softly instead
+                if ghost is None:  # it was in the >> menu: nothing to erase, the toolbar lights up softly instead
                     self._drop(button)
                     hidden_removed = True
                     continue
-                # It stays in its place, unpainted, until its picture has shrunk away; then the place closes.
+                # It stays in its place, unpainted, while the laser erases its picture; then the place closes smoothly.
                 button.vanished = True
                 button.setAttribute(Qt.WA_TransparentForMouseEvents)
                 button.update()
                 self._departing[guid] = (button, self._button_before(previous, button, wanted_guids))
                 ghosts.append(ghost)
         if ghosts:
-            QtCore.QTimer.singleShot(int(ToolbarGlow.DURATION * ToolbarGlow.SHRINK) + 60, self._close_departed)
+            QtCore.QTimer.singleShot(int(ToolbarGlow.DURATION * ToolbarGlow.ERASE) + 60, self._close_departed)
         # Dividers have no identity: the n-th divider widget is reused for the n-th divider entry.
         divider_count = sum(1 for item in wanted if item is None)
         while len(self._dividers) > divider_count:
@@ -1096,23 +1146,65 @@ class ToolbarController(QtCore.QObject):
         corner = button.mapTo(host, QtCore.QPoint(0, 0))
         return button.grab(), QtCore.QRectF(QtCore.QPointF(corner), QtCore.QSizeF(button.size()))
 
+    CLOSE_MS = 420  # a freed place closes smoothly, not at once
+
     def _close_departed(self):
-        """The pictures of removed buttons have shrunk away: close their places and mark where they were."""
+        """The laser has erased the removed buttons: their places close smoothly and a mark stays a moment where each
+        was. The mark sits where the laser stopped, at the place's start, which does not move while the place closes."""
         if not self._departing or self.strip is None:
             self._departing = {}
             return
         vertical = self.strip.style_info.vertical if self.strip.style_info else False
         host = self._host()
         gaps = []
-        for button, _before in self._departing.values():
+        guids = []
+        for guid, (button, _before) in self._departing.items():
+            if guid in self._closing_guids:
+                continue  # removed earlier: its place is already closing
+            guids.append(guid)
             if host is not None and is_valid(button):
                 corner = button.mapTo(host, QtCore.QPoint(0, 0))
                 gaps.append((corner.y(), corner.x(), button.width()) if vertical else (corner.x(), corner.y(), button.height()))
-            self._drop(button)
-        self._departing = {}
-        self._sync_buttons()
         if gaps:
             self._highlight(ToolbarGlow.NONE, gaps=gaps)
+        if not guids:
+            return
+        self._closing_guids.update(guids)
+        animation = QtCore.QVariantAnimation(self)
+        animation.setStartValue(1.0)
+        animation.setEndValue(0.0)
+        animation.setDuration(self.CLOSE_MS)
+        animation.setEasingCurve(QtCore.QEasingCurve.InOutCubic)
+        animation.valueChanged.connect(lambda value, closing=guids: self._narrow(closing, float(value)))
+        animation.finished.connect(lambda closing=guids, done=animation: self._drop_departed(closing, done))
+        self._closing.append(animation)
+        animation.start()
+
+    def _narrow(self, guids, share):
+        """One step of closing places: the buttons take `share` of their length, the rest of the line follows."""
+        if self.strip is None:
+            return
+        for guid in guids:
+            button = self._departing.get(guid, (None, None))[0]
+            if is_valid(button):
+                button.closing = share
+                button.setFixedSize(button._size())
+        self.strip.relayout()
+        if self.floating is not None and isinstance(self.strip, ButtonStrip):
+            self._fit_floating(self.strip.style_info)
+
+    def _drop_departed(self, guids, animation=None):
+        """The places of these removed buttons have closed: the buttons go for good."""
+        if animation in self._closing:
+            self._closing.remove(animation)
+            animation.deleteLater()
+        for guid in guids:
+            self._closing_guids.discard(guid)
+            button = self._departing.pop(guid, (None, None))[0]
+            if is_valid(button):
+                self._drop(button)
+        if self.strip is not None:
+            self._sync_buttons()
 
     def _highlight(self, strength, rings=(), gaps=(), ghosts=()):
         host = self._host()
@@ -1136,17 +1228,21 @@ class ToolbarController(QtCore.QObject):
         if self.floating is not None and isinstance(self.strip, ButtonStrip):
             self.floating.theme = theme
             self.floating.vertical = style.vertical
-            pad = style.padding
-            strip_size = self.strip.size()
-            if style.vertical:
-                self.strip.move(pad, GRIP + pad)
-                size = QtCore.QSize(strip_size.width() + 2 * pad, GRIP + strip_size.height() + 2 * pad)
-            else:
-                self.strip.move(GRIP + pad, pad)
-                size = QtCore.QSize(GRIP + strip_size.width() + 2 * pad, strip_size.height() + 2 * pad)
-            self.floating.setFixedSize(size)
-            self.floating.move(clamp_to_screen(self.floating.pos(), size))
-            self.floating.update()
+            self._fit_floating(style)
+
+    def _fit_floating(self, style):
+        """The floating window around its buttons (also every step while a removed button's place closes)."""
+        pad = style.padding
+        strip_size = self.strip.size()
+        if style.vertical:
+            self.strip.move(pad, GRIP + pad)
+            size = QtCore.QSize(strip_size.width() + 2 * pad, GRIP + strip_size.height() + 2 * pad)
+        else:
+            self.strip.move(GRIP + pad, pad)
+            size = QtCore.QSize(GRIP + strip_size.width() + 2 * pad, strip_size.height() + 2 * pad)
+        self.floating.setFixedSize(size)
+        self.floating.move(clamp_to_screen(self.floating.pos(), size))
+        self.floating.update()
 
     # --- docked -----------------------------------------------------------------------
     def _build_docked(self, mode):
@@ -1391,13 +1487,20 @@ class ToolbarController(QtCore.QObject):
             self.runtime.uninstall(guid)
 
     def _brand_menu(self):
+        menu = self.build_brand_menu()
+        exec_menu(menu, QtGui.QCursor.pos())
+        menu.deleteLater()
+
+    def build_brand_menu(self):
+        """The `maxpkg` button's menu (built anew for every right click; tests look at it without opening it)."""
         menu = themed_menu(None)
         menu.setStyleSheet(self.themes.qss())
         add_menu_title(menu, "MaxPkg Toolbar", self.themes, icon_name="maxpkg-logo",
                        subtitle="Package Manager " + self.runtime.version, on_click=self._open_catalog,
                        link_icon="external-link", link_tip="Opens the maxpkg.dev catalog in your browser")
         add_action(menu, "Open Manager", lambda: self.open_manager(""), self.themes, "package")
-        add_action(menu, "Check Updates", lambda: self.runtime.check_updates(True), self.themes, "refresh-cw")
+        add_action(menu, "Check Updates", lambda: self.runtime.check_all_updates(), self.themes, "refresh-cw")
+        self._add_manager_update_action(menu)
         add_action(menu, "Toolbar settings...", lambda: self.open_manager("settings:toolbar"), self.themes, "settings")
         settings = self.runtime.settings
         menu.addSeparator()  # the toolbar's look: where it sits and how its buttons appear
@@ -1426,8 +1529,19 @@ class ToolbarController(QtCore.QObject):
         menu.addSeparator()
         self._add_lock_action(menu)
         add_action(menu, "Hide toolbar", self._hide_toolbar, self.themes, "eye-off")
-        exec_menu(menu, QtGui.QCursor.pos())
-        menu.deleteLater()
+        return menu
+
+    def _add_manager_update_action(self, menu):
+        """Check Manager Updates: the Package Manager alone; a newer version installs itself. While a check or an
+        update of the Package Manager runs, the item says so and waits."""
+        state = self.runtime.self_update.state
+        if state == "idle":
+            add_action(menu, "Check Manager Updates", lambda: self.runtime.check_manager_update(), self.themes,
+                       "circle-arrow-up")
+            return
+        busy = add_action(menu, "Updating Package Manager..." if state in ("downloading", "installing")
+                          else "Checking Manager updates...", lambda: None, self.themes, "circle-arrow-up")
+        busy.setEnabled(False)
 
     def _add_lock_action(self, menu):
         """Lock Toolbar / Unlock Toolbar: a locked toolbar keeps every button and divider in its place."""

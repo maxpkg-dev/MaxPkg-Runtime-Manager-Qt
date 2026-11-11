@@ -84,13 +84,14 @@ class Controller:
         updater = self.runtime.self_update
         updater.manager_is_open = self._manager_showing
         if updater.check_due() and not updated_from:
-            self._later(AUTO_CHECK_DELAY_MS + 3000, lambda: updater.check(manual=False))
+            # Check Updates pressed in the first seconds already asked (and maybe tried the update): not twice.
+            self._later(AUTO_CHECK_DELAY_MS + 3000, lambda: updater.checked_once or updater.check(manual=False))
         # The previous version stays as <name>.old until the new one has run for a while.
         self._later(30000, lambda: self_update_rules.cleanup_backups(self.root))
         self._later(60000, self.images.prune_disk)
         if updated_from:
             log.success("self-update", "Updated from {} to {}".format(updated_from, version))
-            self.runtime.say("Package Manager updated to {}.".format(version), "success")
+            self.runtime.say_self_updated()  # also offers the package updates the last check found
         if open_manager or settings.open_manager_on_startup:
             self.open_manager("")
         if welcome:
@@ -298,7 +299,7 @@ class Controller:
             oldest.deleteLater()
         toast = Toast(text, kind, self.themes, None, action=action)
         toast.expired.connect(self._place_screen_toasts)
-        toast.adjustSize()
+        toast.fit()
         toast.show()
         self._screen_toasts = alive + [toast]
         self._place_screen_toasts()
@@ -313,7 +314,7 @@ class Controller:
         area = screen_at(center).availableGeometry()
         bottom = area.bottom() - self.SCREEN_TOAST_MARGIN
         for toast in reversed(self._screen_toasts):  # the newest sits lowest
-            toast.adjustSize()
+            toast.fit()
             point = QtCore.QPoint(area.right() - self.SCREEN_TOAST_MARGIN - toast.width(), bottom - toast.height())
             toast.place(point)
             bottom = point.y() - self.SCREEN_TOAST_GAP

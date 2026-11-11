@@ -109,18 +109,45 @@ class ToolbarGlowTests(unittest.TestCase):
         far = QtCore.QRect(300, 0, 38, 40)
         self.assertGreater(mean_alpha(image, around), 1.5 * mean_alpha(image, far))
 
-    def test_a_removed_button_shrinks_away_and_leaves_a_line(self):
+    def removed(self, vertical, place):
         self.host.show()
         picture = QtGui.QPixmap(30, 30)
         picture.fill(QtGui.QColor("#ff0000"))
         glow = ToolbarGlow(self.host)
-        glow.play(False, ToolbarGlow.NONE, gaps=[(100, 5, 30)], ghosts=[(picture, QtCore.QRectF(100, 5, 30, 30))])
-        place = QtCore.QRect(100, 5, 30, 30)
-        self.assertGreater(red_pixels(self.frame(glow, 0.05), place), 50)
-        self.assertEqual(red_pixels(self.frame(glow, 0.6), place), 0)
+        glow.play(vertical, ToolbarGlow.NONE, ghosts=[(picture, QtCore.QRectF(place))])
+        return glow
+
+    def test_a_laser_erases_a_removed_button_from_right_to_left(self):
+        glow = self.removed(False, QtCore.QRect(100, 5, 30, 30))
+        start = self.frame(glow, 0.05)
+        self.assertGreater(red_pixels(start, QtCore.QRect(100, 5, 20, 30)), 50)  # still there, barely faded
+        self.assertGreater(accent_pixels(start, QtCore.QRect(124, 5, 10, 30)), 10)  # the laser at its right end
+        half = self.frame(glow, ToolbarGlow.ERASE / 2)  # the laser in the middle (x 115)
+        self.assertGreater(red_pixels(half, QtCore.QRect(100, 5, 6, 30)), 20)  # ahead of it: fading, not gone
+        self.assertEqual(red_pixels(half, QtCore.QRect(123, 5, 7, 30)), 0)  # behind it: erased
+        self.assertGreater(accent_pixels(half, QtCore.QRect(112, 5, 6, 30)), 10)
+        self.assertEqual(accent_pixels(half, QtCore.QRect(200, 0, 60, 40)), 0)  # only there: no wash on the toolbar
+        end = self.frame(glow, ToolbarGlow.ERASE + 0.02)
+        self.assertEqual(red_pixels(end, QtCore.QRect(100, 5, 30, 30)), 0)
+        self.assertGreater(mean_alpha(end, QtCore.QRect(99, 6, 3, 28)), 150)  # it stopped where the place closes
+
+    def test_on_a_vertical_toolbar_the_laser_goes_up(self):
+        self.host.setGeometry(-9000, -9000, 40, 400)
+        glow = self.removed(True, QtCore.QRect(5, 100, 30, 30))
+        half = self.frame(glow, ToolbarGlow.ERASE / 2)
+        self.assertGreater(red_pixels(half, QtCore.QRect(5, 100, 30, 6)), 20)
+        self.assertEqual(red_pixels(half, QtCore.QRect(5, 123, 30, 7)), 0)
+        self.assertGreater(accent_pixels(half, QtCore.QRect(5, 112, 30, 6)), 10)
+
+    def test_the_closed_place_keeps_a_glowing_mark_a_moment(self):
+        self.host.show()
+        glow = ToolbarGlow(self.host)
+        glow.play(False, ToolbarGlow.NONE, gaps=[(100, 5, 30)])
         image = self.frame(glow, 0.1)
         self.assertGreater(mean_alpha(image, QtCore.QRect(99, 6, 3, 28)), 150)
+        self.assertGreater(mean_alpha(image, QtCore.QRect(94, 6, 3, 28)), 10)  # its glow
         self.assertEqual(mean_alpha(image, QtCore.QRect(300, 6, 30, 28)), 0)
+        self.assertEqual(mean_alpha(self.frame(glow, 1.0), QtCore.QRect(94, 0, 14, 40)), 0)
 
     def test_uses_the_toolbar_accent(self):
         self.assertEqual(QtGui.QColor(InsertionLine.ACCENT).name(), "#3af1c5")

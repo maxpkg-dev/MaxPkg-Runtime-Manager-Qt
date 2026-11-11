@@ -16,19 +16,29 @@ copy over the installed folder except the user's data, restart); the weak points
 ## Flow
 
 1. **Check** (`services/self_update.py`): 7 s after every start while *Check Package Manager updates automatically*
-   is on (the interval does not apply); or Settings > Updates > *Check for updates*.
+   is on (the interval does not apply); every *Check Updates* (the Manager's header button and the toolbar's MaxPkg
+   menu); *Check Manager Updates* in the toolbar's MaxPkg menu (the Package Manager alone); or Settings > Updates >
+   *Check for updates*.
    GET `https://api.github.com/repos/.../releases?per_page=15` -> `domain/self_update.parse_releases/select_update`.
-2. **Install without asking**: a newer release found by the startup check is installed at once. Only a running
-   package operation delays it (retried every 15 s for up to 5 minutes, then a toast with an *Update* button). An
-   open Manager is reopened after the restart. A manual *Check for updates* offers the update with a button.
+2. **Install without asking**: a newer release found by the startup check, *Check Updates* or *Check Manager Updates*
+   is installed at once (*Check Manager Updates* uses the same steps and messages, without the package part).
+   Only a running package operation delays it (the startup check looks again every 15 s, *Check Updates* every 2 s, for
+   up to 5 minutes, then a toast with an *Update* button). An open Manager is reopened after the restart.
+   Settings > Updates > *Check for updates* offers the update with a button instead.
+   *Check Updates* asks about the packages (maxpkg.dev) and the Package Manager (GitHub) at the same time: the button
+   says *Checking updates...* until both answered, then one toast says both results (`domain/update_check.summarize`).
+   A failed check never hides the other result; a Package Manager that installs itself comes first, and the new
+   version names the package updates again after the restart.
 3. **Download + verify**: the `.sha256` file, then the `.mzp` into `downloads/`; SHA-256 must match (`domain/integrity`).
+   Any failure says *Package Manager could not be updated* with *Try Again* and *Download manually* (opens the latest
+   release on GitHub; its MZP can be dragged into a viewport).
 4. **Unpack** safely (`safe_extract` refuses paths outside the folder), find the program root, check that its
    `version.ini` equals the release version.
 5. **Swap** (`python/entry.py: apply_update`, outside the reloadable package): stop the running Runtime, replace
    `python/`, `assets/`, `StartMaxPkg.ms`, `version.ini`, `uninstall.ms` (the old ones stay as `*.old`), start the
    new code through `bootstrap.py`. If it does not start, the swap is undone and the old code starts again.
-6. The new Runtime says *Package Manager updated to X*, reopens the Manager if it was open and deletes the `.old`
-   copies after 30 s. `settings.ini`, `logs/`, `cache/`, `downloads/` are never touched.
+6. The new Runtime says *Package Manager updated to X* (with an *Update* / *Update All* button when the last package
+   check found updates), reopens the Manager if it was open and deletes the `.old` copies after 30 s. `settings.ini`, `logs/`, `cache/`, `downloads/` are never touched.
 
 A folder with `.git`, `.github` or `tests/` (a source checkout) is never overwritten: it only reports a new version.
 
@@ -42,6 +52,10 @@ A folder with `.git`, `.github` or `tests/` (a source checkout) is never overwri
 ## Tests
 
 - `tests/unit/test_self_update.py`: release choice, checksum text, unsafe archives, swap and rollback (run with `tests/run_unit.py`).
+- `tests/unit/test_update_check.py`: the one message of *Check Updates* for every pair of results.
+- `tests/unit/test_check_updates_flow.py` (Qt, inside Max through `tests/run_unit.py`): *Check Updates* with a fake
+  network: both checks under one *Checking updates...*, install and restart of a newer Package Manager, waiting for a
+  package operation, source checkout, failed checks, failed checksum download and mismatch, *Download manually*.
 - `tests/max/self_update_e2e.py` (inside Max): wrong checksum refused, automatic update from a file:// feed, rollback of
   a release that does not start. It backs up and restores the installed copy and restarts the Runtime several times.
 - Only this repository's releases are used: both files must come from

@@ -14,11 +14,17 @@ import shutil
 from ..domain import integrity
 from ..domain import self_update as rules
 from ..qt_compat import QtCore, Signal
-from . import log, network
+from . import log, max_api, network
 
 RESTART_DELAY_MS = 300
-WAIT_MS = 15000      # an automatic update waits this long for a running package operation ...
-WAIT_ATTEMPTS = 20   # ... up to 5 minutes, then it only offers the update
+WAIT_MS = 15000            # an automatic update looks this often whether a running package operation ended ...
+WAIT_LIMIT_MS = 300000     # ... for up to 5 minutes, then it only offers the update
+MANUAL_WAIT_MS = 2000      # after Check Updates the user is waiting: look more often
+
+# What check(report=...) hands to its caller.
+CURRENT = "current"
+AVAILABLE = "available"    # self.available holds the release
+FAILED = "failed"
 
 
 def _read_text(path):
@@ -27,6 +33,8 @@ def _read_text(path):
 
 
 def _remove(path):
+    if not path:  # a failed download hands over no file
+        return
     try:
         if os.path.isdir(path):
             shutil.rmtree(path)
@@ -52,6 +60,7 @@ class SelfUpdater(QtCore.QObject):
         # Only this repository's releases. The in-Max test sets these two to a local feed on this object.
         self.releases_url = rules.RELEASES_URL
         self.download_prefix = rules.DOWNLOAD_PREFIX
+        self._later = QtCore.QTimer.singleShot  # (ms, callback); unit tests run the waits at once
         self._stopped = False
 
     # ----------------------------------------------------------------- facts
@@ -69,19 +78,22 @@ class SelfUpdater(QtCore.QObject):
         self._stopped = True
 
     # ----------------------------------------------------------------- check
-    def check(self, manual=False):
-        """Ask GitHub for the newest release. `manual`: answer with a toast even when nothing is new."""
+    def check(self, manual=False, report=None):
+        """Ask GitHub for the newest release. `manual`: answer with a toast even when nothing is new.
+        `report`: Check Updates, which also checks the packages, gets CURRENT, AVAILABLE or FAILED instead of any
+        toast and decides itself what to say and whether to install. False when a check or update already runs."""
         if self._stopped or self.state != "idle":
             return False
         self.state = "checking"
         self.error = ""
         self.changed.emit()
         target = os.path.join(self.runtime.paths.downloads, "maxpkg-runtime-releases.json")
-        self.runtime.network.download(self.releases_url, target, lambda path, error: self._checked(path, error, manual),
+        self.runtime.network.download(self.releases_url, target,
+                                      lambda path, error: self._checked(path, error, manual, report),
                                       max_bytes=4 * 1024 * 1024)
         return True
 
-    def _checked(self, path, error, manual):
+    def _checked(self, path, error, manual, report=None):
         if self._stopped:
             return
         self.state = "idle"
@@ -96,10 +108,12 @@ class SelfUpdater(QtCore.QObject):
             self.error = "The update check failed. Try again later."
             log.warning("self-update", "Release check failed: " + (str(error) if isinstance(error, rules.UpdateError)
                                                                   else network.describe(error)))
-            if manual:
+            if manual and report is None:
                 self.runtime.say("The Package Manager update check failed.\nThe MaxPkg release list could not be "
                                  "read.", "error", [("Try Again", "refresh-cw", lambda: self.check(True))])
             self.changed.emit()
+            if report is not None:
+                report(FAILED)
             return
         self.checked_once = True
         self.runtime.settings.last_runtime_check_utc = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
@@ -107,13 +121,16 @@ class SelfUpdater(QtCore.QObject):
         self.available = rules.select_update(releases, self.runtime.version, self.runtime.channel)
         if self.available is None:
             log.info("self-update", "Package Manager {} is current".format(self.runtime.version))
-            if manual:
+            if manual and report is None:
                 self.runtime.say("Package Manager {} is up to date.".format(self.runtime.version), "success")
         else:
             log.info("self-update", "Package Manager {} is available (running {})".format(
                 self.available.version, self.runtime.version))
-            self._offer(manual)
+            if report is None:
+                self._offer(manual)
         self.changed.emit()
+        if report is not None:
+            report(CURRENT if self.available is None else AVAILABLE)
 
     def _offer(self, manual):
         update = self.available
@@ -129,16 +146,27 @@ class SelfUpdater(QtCore.QObject):
             self.runtime.say("Package Manager {} is available.\nYou have {}.".format(update.version, self.runtime.version),
                              "info", [("Update", "download", self.install)])
 
-    def _install_when_idle(self, update, attempt=0):
+    def busy_with_packages(self):
+        """A package operation runs or waits: the Package Manager must not restart now."""
+        return bool(self.runtime.operation or self.runtime.install_queue)
+
+    def install_when_idle(self, interval=MANUAL_WAIT_MS):
+        """Install the available release as soon as no package operation runs (Check Updates found it)."""
+        if self.available is None or not self.can_install():
+            return False
+        self._install_when_idle(self.available, interval=interval)
+        return True
+
+    def _install_when_idle(self, update, waited=0, interval=WAIT_MS):
         if self._stopped or self.available is not update or self.state != "idle":
             return
-        if self.runtime.operation or self.runtime.install_queue:
-            if attempt >= WAIT_ATTEMPTS:
+        if self.busy_with_packages():
+            if waited >= WAIT_LIMIT_MS:
                 log.warning("self-update", "Automatic update postponed: a package operation keeps running")
                 self.runtime.say("Package Manager {} is available.".format(update.version), "info",
                                  [("Update", "download", self.install)])
                 return
-            QtCore.QTimer.singleShot(WAIT_MS, lambda: self._install_when_idle(update, attempt + 1))
+            self._later(interval, lambda: self._install_when_idle(update, waited + interval, interval))
             return
         log.info("self-update", "Updating automatically to " + update.version)
         self.install()
@@ -172,7 +200,8 @@ class SelfUpdater(QtCore.QObject):
             self.error = message
             self.runtime._finish()
             self.runtime.say("Package Manager could not be updated.\n" + message, "error",
-                             [("Try Again", "refresh-cw", self.install)])
+                             [("Try Again", "refresh-cw", self.install),
+                              ("Download manually", "external-link", self.open_latest_release)])
             self.changed.emit()
 
         def hash_downloaded(path, error):
@@ -215,10 +244,16 @@ class SelfUpdater(QtCore.QObject):
             self.runtime._finish()
             self.changed.emit()
             log.info("self-update", "Update {} verified and unpacked; restarting".format(version))
-            QtCore.QTimer.singleShot(RESTART_DELAY_MS, lambda: self._restart(str(staged)))
+            self._later(RESTART_DELAY_MS, lambda: self._restart(str(staged)))
 
         self.runtime.network.download(update.hash_url, paths["hash"], hash_downloaded)
         return True
+
+    def open_latest_release(self):
+        """The newest release on GitHub in the browser, for an update that failed: its MZP can be installed by hand
+        (dragged into a viewport)."""
+        log.info("self-update", "Opened the latest release page for a manual download")
+        return max_api.open_url(rules.LATEST_RELEASE_URL)
 
     def _restart(self, staged):
         """Hand over to python/entry.py: it stops this Runtime (and so this object), swaps the files and starts the

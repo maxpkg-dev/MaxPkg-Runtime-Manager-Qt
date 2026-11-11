@@ -107,16 +107,16 @@ class Toast(QtWidgets.QFrame):
             texts.addWidget(body)
         # `action`: one (label, icon, callback) or a list of them; the first is the main (primary) button.
         actions = [action] if isinstance(action, tuple) else list(action or [])
+        buttons = []
+        button_rows = vbox(spacing=8)
         if actions:
-            buttons = hbox(spacing=8)
             for position, (action_text, action_icon, callback) in enumerate(actions):
                 button = Button(action_text, action_icon, "primary" if position == 0 else "default", themes,
                                 compact=True)
                 button.clicked.connect(lambda _checked=False, run=callback: (self._expire(), run()))
-                buttons.addWidget(button)
-            buttons.addStretch(1)
+                buttons.append(button)
             texts.addSpacing(6)
-            texts.addLayout(buttons)
+            texts.addLayout(button_rows)
         if len(lines) > 1 or actions:
             texts.addStretch(1)
         close = IconButton("x", "Close", themes)
@@ -132,6 +132,7 @@ class Toast(QtWidgets.QFrame):
             row.setAlignment(texts, Qt.AlignVCenter)  # a single line sits beside the icon's middle
         self.setLayout(row)
         self.setFixedWidth(self.WIDTH)
+        self._place_buttons(buttons, button_rows, text_width)
         self.setAttribute(Qt.WA_Hover)
         # An offer stays longer: there is something to decide.
         self._lifetime = self.LIFETIME_MS.get(kind, self.DEFAULT_LIFETIME_MS) + (3000 if actions else 0)
@@ -155,6 +156,36 @@ class Toast(QtWidgets.QFrame):
         self._fade.setEndValue(1.0)
         # Drop the effect once visible: it renders through an offscreen buffer that let the page show through.
         self._fade.finished.connect(lambda: self.setGraphicsEffect(None))
+
+    BUTTON_GAP = 8
+
+    def _place_buttons(self, buttons, rows, width):
+        """Action buttons side by side; a button that does not fit the text column starts the next line. (Try Again
+        with Download manually is wider than the column: in one line it pushed the text out of the toast.)"""
+        if not buttons:
+            return
+        self.ensurePolished()
+        line, used = None, 0
+        for button in buttons:
+            button.setParent(self)
+            button.ensurePolished()  # the theme's padding and icon size count only once the style sheet applied
+            needed = button.sizeHint().width()
+            if line is None or used + self.BUTTON_GAP + needed > width:
+                if line is not None:
+                    line.addStretch(1)
+                line = hbox(spacing=self.BUTTON_GAP)
+                rows.addLayout(line)
+                used = needed
+            else:
+                used += self.BUTTON_GAP + needed
+            line.addWidget(button)
+        line.addStretch(1)
+
+    def fit(self):
+        """Take the height its text and buttons need. A toast of its own (the screen corner) must not use
+        adjustSize(): Qt gives a window whose layout stretches at least 100 px, a gap under two lines of text."""
+        height = self.heightForWidth(self.width())
+        self.resize(self.width(), height if height > 0 else self.sizeHint().height())
 
     def place(self, point):
         """Move to `point`; the first time it slides in from the right and fades in."""
@@ -838,7 +869,7 @@ class ManagerWindow(QtWidgets.QWidget):
         self.configurator_button.clicked.connect(lambda: self.open_settings("toolbar"))
         self.settings_button.clicked.connect(lambda: self.open_settings(""))  # reopens the last page
         self.support_button.clicked.connect(self.ask_support)
-        self.check_button.clicked.connect(lambda: runtime.check_updates(True))
+        self.check_button.clicked.connect(lambda: runtime.check_all_updates())  # packages and the Package Manager
         self.update_all_button.clicked.connect(runtime.update_all)
         self.website.clicked.connect(lambda: runtime.open_catalog())  # the site's catalog, not its home page
         self.logs_link.clicked.connect(self.open_logs)
