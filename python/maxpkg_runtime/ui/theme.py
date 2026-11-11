@@ -192,12 +192,13 @@ class ThemeService(QtCore.QObject):
                 glyph = icons.pixmap(name, color, size, dpr)
                 nudge = int(round(ICON_NUDGE * dpr))
                 padded = QtGui.QPixmap(int(round((size + ICON_TEXT_GAP) * dpr)), glyph.height() + 2 * nudge)
+                padded.setDevicePixelRatio(dpr)  # before painting: the glyph has this ratio too, and is drawn 1:1
                 padded.fill(QtCore.Qt.transparent)
                 painter = QtGui.QPainter(padded)
                 icon_on_right = widget.layoutDirection() == QtCore.Qt.RightToLeft
-                painter.drawPixmap(padded.width() - glyph.width() if icon_on_right else 0, 2 * nudge, glyph)
+                left = (padded.width() - glyph.width()) / dpr if icon_on_right else 0.0
+                painter.drawPixmap(QtCore.QPointF(left, 2.0 * nudge / dpr), glyph)
                 painter.end()
-                padded.setDevicePixelRatio(dpr)
                 widget.setIcon(QtGui.QIcon(padded))
                 widget.setIconSize(QtCore.QSize(size + ICON_TEXT_GAP, size + 2 * ICON_NUDGE))
             else:
