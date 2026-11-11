@@ -109,6 +109,7 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         self.brand_icon = brand_icon
         self.badge_count = 0
         self.locked = False  # Toolbar lock: no drag reorder (set by ToolbarController)
+        self.vanished = False  # removed: it keeps its place, unpainted, while its picture shrinks away
         self.setFocusPolicy(Qt.NoFocus)
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_Hover)
@@ -185,6 +186,8 @@ class ToolbarButton(QtWidgets.QAbstractButton):
 
     # --- painting -----------------------------------------------------------------
     def paintEvent(self, _event):
+        if self.vanished:
+            return
         theme = self.theme
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
@@ -559,6 +562,156 @@ class InsertionLine(QtWidgets.QWidget):
         painter.end()
 
 
+def _ease_in_out(value):
+    value = max(0.0, min(1.0, value))
+    return value * value * (3.0 - 2.0 * value)
+
+
+class ToolbarGlow(QtWidgets.QWidget):
+    """Draws the eye to the toolbar. When it appears, moves or changes its look: an accent wash that a bright band
+    sweeps along once, then fades out. A new button: a softer wash and two expanding rings around it. A removed button:
+    a picture of it shrinks away in its still empty place; once the place closes, a short-lived line marks where it was.
+    It covers the toolbar, never takes the mouse, and waits until the toolbar is on screen (3ds Max may still be
+    starting)."""
+
+    DURATION = 1600  # ms
+    PULSE = 0.55  # share of the duration one ring takes
+    SHRINK = 0.4  # share of the duration a removed button takes to shrink away
+    STRONG, SOFT, NONE = 1.0, 0.55, 0.0  # strength of the wash: appeared, moved or restyled; a new button; a removed one
+
+    def __init__(self, host):
+        QtWidgets.QWidget.__init__(self, host)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_NoSystemBackground)  # only what paintEvent draws: the toolbar shows through
+        self.setAutoFillBackground(False)
+        self.vertical = False
+        self.strength = self.STRONG
+        self.rings = []  # new buttons, measured on every frame: the toolbar lays them out after this starts
+        self.gaps = []  # (offset along the toolbar, start across it, length across it)
+        self.ghosts = []  # (picture, QRectF in this widget) of removed buttons
+        self.progress = 1.0
+        self._tries = 0
+        self._animation = QtCore.QVariantAnimation(self)
+        self._animation.setStartValue(0.0)
+        self._animation.setEndValue(1.0)
+        self._animation.setDuration(self.DURATION)
+        self._animation.valueChanged.connect(self._step)
+        self._animation.finished.connect(self.hide)
+        self._retry = QtCore.QTimer(self)
+        self._retry.setSingleShot(True)
+        self._retry.timeout.connect(self._start)
+        self.hide()
+
+    def play(self, vertical, strength, rings=(), gaps=(), ghosts=()):
+        self.vertical = vertical
+        self.strength = strength
+        self.rings = list(rings)
+        self.gaps = list(gaps)
+        self.ghosts = list(ghosts)
+        self._tries = 0
+        self._start()
+
+    def _start(self):
+        host = self.parentWidget()
+        if host is None or not host.isVisible() or not host.window().isVisible():
+            self._tries += 1
+            if self._tries < 40:
+                self._retry.start(250)
+            return
+        self._animation.stop()
+        self.progress = 0.0
+        self.setGeometry(host.rect())
+        self.raise_()
+        self.show()
+        self._animation.start()
+
+    def _step(self, value):
+        self.progress = float(value)
+        host = self.parentWidget()
+        if host is not None and self.geometry() != host.rect():
+            self.setGeometry(host.rect())
+        self.update()
+
+    def paintEvent(self, _event):
+        x = self.progress
+        fade = 1.0 - x
+        accent = QtGui.QColor(InsertionLine.ACCENT)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        rect = QtCore.QRectF(self.rect())
+        along = rect.height() if self.vertical else rect.width()
+        wash = QtGui.QColor(accent)
+        wash.setAlphaF(0.32 * self.strength * fade ** 1.6)
+        painter.fillRect(rect, wash)
+        sweep = x / 0.7
+        if sweep < 1.0:
+            band = max(60.0, along * 0.35)
+            center = -band + (along + 2 * band) * _ease_in_out(sweep)
+            if self.vertical:
+                gradient = QtGui.QLinearGradient(0, center - band / 2, 0, center + band / 2)
+            else:
+                gradient = QtGui.QLinearGradient(center - band / 2, 0, center + band / 2, 0)
+            for stop, alpha in ((0.0, 0.0), (0.5, 0.55 * self.strength * (1.0 - 0.5 * sweep)), (1.0, 0.0)):
+                color = QtGui.QColor(accent)
+                color.setAlphaF(alpha)
+                gradient.setColorAt(stop, color)
+            painter.fillRect(rect, QtGui.QBrush(gradient))
+        border = QtGui.QColor(accent)
+        border.setAlphaF(0.9 * self.strength * fade ** 2)
+        painter.setPen(QtGui.QPen(border, 2))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(rect.adjusted(1, 1, -1, -1))
+        host = self.parentWidget()
+        overflow = host.findChild(QtWidgets.QToolButton, "qt_toolbar_ext_button") if host is not None else None
+        targets = []
+        for widget in self.rings:
+            # isVisibleTo, not isVisible: 3ds Max 2022 reports a button the line pushed into >> as visible
+            if is_valid(widget) and host is not None and widget.isVisibleTo(host):
+                targets.append(widget)
+            elif overflow is not None and overflow.isVisible() and overflow not in targets:
+                targets.append(overflow)  # the new button is in the >> menu of a crowded toolbar line: point there
+        for widget in targets:
+            if host is None:
+                continue
+            ring = QtCore.QRectF(QtCore.QPointF(widget.mapTo(host, QtCore.QPoint(0, 0))), QtCore.QSizeF(widget.size()))
+            glow = QtGui.QColor(accent)
+            glow.setAlphaF(0.3 * fade)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(glow)
+            painter.drawRoundedRect(ring, 4, 4)
+            for delay in (0.0, 0.3):
+                pulse = (x - delay) / self.PULSE
+                if 0.0 <= pulse < 1.0:
+                    grow = 2.0 + 10.0 * (1.0 - (1.0 - pulse) ** 3)
+                    color = QtGui.QColor(accent)
+                    color.setAlphaF(1.0 - pulse)
+                    painter.setPen(QtGui.QPen(color, 2.5))
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawRoundedRect(ring.adjusted(-grow, -grow, grow, grow), 4 + grow, 4 + grow)
+        for picture, place in self.ghosts:
+            shrink = 1.0 - _ease_in_out(x / self.SHRINK)
+            if shrink <= 0.02:
+                continue
+            painter.save()
+            painter.setOpacity(shrink)
+            painter.translate(place.center())
+            painter.scale(shrink, shrink)
+            painter.rotate((1.0 - shrink) * 40.0)
+            painter.drawPixmap(QtCore.QRectF(-place.width() / 2, -place.height() / 2, place.width(), place.height()), picture,
+                               QtCore.QRectF(picture.rect()))
+            painter.restore()
+        for offset, start, length in self.gaps:
+            color = QtGui.QColor(accent)
+            color.setAlphaF(fade ** 1.5)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(color)
+            if self.vertical:
+                painter.drawRoundedRect(QtCore.QRectF(start, offset - 1.5, length, 3), 1.5, 1.5)
+            else:
+                painter.drawRoundedRect(QtCore.QRectF(offset - 1.5, start, 3, length), 1.5, 1.5)
+        painter.end()
+
+
 class DockedStrip:
     """Buttons of the docked QToolBar, one QWidgetAction each, so Qt's own overflow chevron
     can move individual buttons into its popup when the toolbar line is too short."""
@@ -735,6 +888,9 @@ class ToolbarController(QtCore.QObject):
         self._buttons = {}
         self._dividers = []
         self._drag_order = None
+        self._glow = None
+        self._look = None  # what the buttons looked like at the last sync: a change lights the toolbar up
+        self._departing = {}  # guid -> (removed button still holding its place, guid of the button before it)
         runtime.packages_changed.connect(self.sync)
         runtime.settings_changed.connect(self._on_settings)
         themes.toolbar_changed.connect(self.sync)
@@ -769,6 +925,8 @@ class ToolbarController(QtCore.QObject):
         self.toolbar = self.floating = self.strip = None
         self._buttons = {}
         self._dividers = []
+        self._glow = None  # a child of the host, gone with it
+        self._departing = {}
         self._mode = ""
 
     def _on_settings(self, area):
@@ -783,6 +941,7 @@ class ToolbarController(QtCore.QObject):
             return
         mode = settings.toolbar_dock_position
         floating = mode.startswith("floating")
+        placed = True  # the toolbar appeared or moved: it lights up
         if floating and (self.floating is None or self._mode != mode):
             self._destroy_hosts()
             self._build_floating(mode)
@@ -791,8 +950,10 @@ class ToolbarController(QtCore.QObject):
             self._build_docked(mode)
         elif not floating and AREAS[mode] != self._area:
             self._move_docked(mode)
+        else:
+            placed = False
         self._mode = mode
-        self._sync_buttons()
+        self._sync_buttons(placed)
 
     def _style(self):
         vertical = None
@@ -800,13 +961,24 @@ class ToolbarController(QtCore.QObject):
             vertical = self.toolbar.orientation() == Qt.Vertical
         return ToolbarStyle(self.runtime.settings, vertical)
 
-    def _sync_buttons(self):
+    def _sync_buttons(self, placed=False):
+        """`placed`: the toolbar has just appeared or moved, so it lights up as a whole; otherwise buttons that came
+        or went light up."""
         style = self._style()
         theme = self.themes.toolbar
         settings = self.runtime.settings
         strip = self.strip
         strip.style_info = style
         parent = strip if isinstance(strip, QtWidgets.QWidget) else self.toolbar
+        fresh = strip.brand is None  # a new host: every button is new, none of them is news
+        look = (settings.toolbar_button_size, settings.toolbar_icon_size, settings.toolbar_density,
+                settings.toolbar_title_mode, settings.toolbar_subtitle_mode, theme.id)
+        restyled = not fresh and look != self._look
+        self._look = look
+        added = []
+        ghosts = []
+        hidden_removed = False
+        previous = list(strip.buttons)
         if strip.brand is None:
             strip.brand = ToolbarButton(ToolbarItem("", "maxpkg", "", "Open MaxPkg Manager", "", "M", False), style,
                                         theme, None, brand=True, parent=parent)
@@ -825,10 +997,19 @@ class ToolbarController(QtCore.QObject):
         for guid in list(self._buttons):
             if guid not in wanted_guids:
                 button = self._buttons.pop(guid)
-                if isinstance(strip, DockedStrip):
-                    strip.forget(button)
-                button.hide()
-                button.deleteLater()
+                ghost = self._picture_of(button)
+                if ghost is None:  # it was in the >> menu: nothing to shrink, the toolbar lights up softly instead
+                    self._drop(button)
+                    hidden_removed = True
+                    continue
+                # It stays in its place, unpainted, until its picture has shrunk away; then the place closes.
+                button.vanished = True
+                button.setAttribute(Qt.WA_TransparentForMouseEvents)
+                button.update()
+                self._departing[guid] = (button, self._button_before(previous, button, wanted_guids))
+                ghosts.append(ghost)
+        if ghosts:
+            QtCore.QTimer.singleShot(int(ToolbarGlow.DURATION * ToolbarGlow.SHRINK) + 60, self._close_departed)
         # Dividers have no identity: the n-th divider widget is reused for the n-th divider entry.
         divider_count = sum(1 for item in wanted if item is None)
         while len(self._dividers) > divider_count:
@@ -864,14 +1045,83 @@ class ToolbarController(QtCore.QObject):
                 button.alt_drag.connect(self._on_alt_drag)
                 button.show()
                 self._buttons[item.guid] = button
+                if not fresh:
+                    added.append(button)
             else:
                 button.apply(item, style, theme)
             ordered.append(button)
+        for guid, (button, before) in self._departing.items():
+            button.apply(button.item, style, theme)
+            index = 0
+            for position, widget in enumerate(ordered):
+                if isinstance(widget, ToolbarButton) and widget.item.guid == before:
+                    index = position + 1
+                    break
+            ordered.insert(index, button)
         for widget in ordered:
             widget.locked = settings.toolbar_locked
         strip.buttons = ordered
         strip.relayout()
         self._apply_host_theme(style)
+        if placed or fresh or restyled:
+            self._highlight(ToolbarGlow.STRONG)
+        elif added or ghosts or hidden_removed:
+            self._highlight(ToolbarGlow.SOFT if added or hidden_removed else ToolbarGlow.NONE, added, ghosts=ghosts)
+
+    def _host(self):
+        return self.toolbar if self.toolbar is not None else self.floating
+
+    def _drop(self, button):
+        if isinstance(self.strip, DockedStrip):
+            self.strip.forget(button)
+        button.hide()
+        button.deleteLater()
+
+    @staticmethod
+    def _button_before(previous, button, wanted_guids):
+        """The guid of the nearest button before `button` that stays, or None: a departing button keeps its place
+        after it."""
+        index = previous.index(button) if button in previous else 0
+        for widget in reversed(previous[:index]):
+            if isinstance(widget, ToolbarButton) and not widget.vanished and widget.item.guid in wanted_guids:
+                return widget.item.guid
+        return None
+
+    def _picture_of(self, button):
+        """A picture of a button about to go and its place in the host, or None when it is not on screen (isVisibleTo:
+        3ds Max 2022 reports a button in the >> menu as visible)."""
+        host = self._host()
+        if host is None or not is_valid(button) or not button.isVisibleTo(host):
+            return None
+        corner = button.mapTo(host, QtCore.QPoint(0, 0))
+        return button.grab(), QtCore.QRectF(QtCore.QPointF(corner), QtCore.QSizeF(button.size()))
+
+    def _close_departed(self):
+        """The pictures of removed buttons have shrunk away: close their places and mark where they were."""
+        if not self._departing or self.strip is None:
+            self._departing = {}
+            return
+        vertical = self.strip.style_info.vertical if self.strip.style_info else False
+        host = self._host()
+        gaps = []
+        for button, _before in self._departing.values():
+            if host is not None and is_valid(button):
+                corner = button.mapTo(host, QtCore.QPoint(0, 0))
+                gaps.append((corner.y(), corner.x(), button.width()) if vertical else (corner.x(), corner.y(), button.height()))
+            self._drop(button)
+        self._departing = {}
+        self._sync_buttons()
+        if gaps:
+            self._highlight(ToolbarGlow.NONE, gaps=gaps)
+
+    def _highlight(self, strength, rings=(), gaps=(), ghosts=()):
+        host = self._host()
+        if not is_valid(host):
+            return
+        if self._glow is None or not is_valid(self._glow):
+            self._glow = ToolbarGlow(host)
+        vertical = self.strip.style_info.vertical if self.strip is not None and self.strip.style_info else False
+        self._glow.play(vertical, strength, rings, gaps, ghosts)
 
     def _apply_host_theme(self, style):
         theme = self.themes.toolbar
@@ -992,7 +1242,7 @@ class ToolbarController(QtCore.QObject):
             self.runtime.settings.toolbar_dock_position = names[area]
             self._mode = names[area]
             self.runtime.save_settings("toolbar-position")
-            self._sync_buttons()
+            self._sync_buttons(placed=True)
         elif self.strip is not None and self.strip.style_info is not None:
             vertical = self.toolbar.orientation() == Qt.Vertical
             if vertical != self.strip.style_info.vertical:
@@ -1040,6 +1290,7 @@ class ToolbarController(QtCore.QObject):
             self._sync_floating_position(settings.toolbar_dock_position)
             self._apply_host_theme(self._style())
             self._remember_floating(self.floating.pos())
+            self._highlight(ToolbarGlow.STRONG)
 
     # --- reorder ----------------------------------------------------------------------
     def _on_alt_drag(self, button, global_point):
