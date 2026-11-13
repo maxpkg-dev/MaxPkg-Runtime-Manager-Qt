@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.4
+
+- Added: A favorite collection arranged as a toolbar on maxpkg.dev installs with the same order and dividers. Your other toolbar buttons keep their places and the collection follows them after a divider; on a toolbar with no other buttons it is set up exactly as on the site. Scripts already installed are not installed again, only moved into place, and installing the collection again gives the same toolbar.
+- Changed: Buttons of the collection you had hidden show again; a locked toolbar keeps its order and says so.
+
 ## 2.1.3
 
 - Added: Dragging a script on the toolbar lifts it and lets it follow the cursor while the other buttons step aside to show where it will land; on release it settles in with a small bounce and a ring.
