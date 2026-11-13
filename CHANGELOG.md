@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.3
+
+- Added: Dragging a script on the toolbar lifts it and lets it follow the cursor while the other buttons step aside to show where it will land; on release it settles in with a small bounce and a ring.
+- Added: On a locked toolbar a dragged button shakes, next to the tip that the toolbar is locked.
+- Fixed: The rings around a newly installed script and around a dropped button are no longer cut off at the toolbar's edges.
+
 ## 2.1.2
 
 - Added: Check Updates also checks the Package Manager itself and installs a newer version right away, or as soon as a running package operation ends. One message tells both results, and a failed check never hides the other one.
