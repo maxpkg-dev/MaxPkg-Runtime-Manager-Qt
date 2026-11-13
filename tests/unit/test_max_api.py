@@ -17,6 +17,14 @@ class ErrorTextTests(unittest.TestCase):
         self.assertEqual(max_api.error_text(ValueError("")), "ValueError")
 
 
+class FacadeTests(unittest.TestCase):
+    def test_offers_what_the_maxpkg_dev_installers_look_for(self):
+        # The collection installer checks `isProperty MaxPkg #installLayout` before it calls it.
+        for command in ("install", "installMany", "installLayout"):
+            self.assertIn("fn {} ".format(command), max_api._FACADE_SOURCE)
+            self.assertIn('call "{}"'.format(command), max_api._FACADE_SOURCE)
+
+
 class OwnFileTests(unittest.TestCase):
     def setUp(self):
         self.main = sys.modules["__main__"]

@@ -12,7 +12,7 @@ import stat
 import uuid
 
 from ..domain import api, integrity, update_check
-from ..domain.packages import (DIVIDER, Package, compatible, incompatibility, is_divider, is_newer,
+from ..domain.packages import (DIVIDER, Package, arrange_collection, compatible, incompatibility, is_divider, is_newer,
                                merge_visible_order, normalized_order, ordered_for_toolbar, read_mzp_manifest, scan,
                                supported_versions, toolbar_entries, with_brand_divider)
 from ..domain.settings import load_or_migrate
@@ -112,6 +112,7 @@ class Runtime(QtCore.QObject):
         self.operation = ""           # '' when no critical operation runs
         self.install_queue = []       # references MaxScript asked to install while an operation ran
         self._batch = None            # results of those installs until the queue is empty (collection summary)
+        self._layouts = []            # collection layouts (MaxPkg.installLayout) to arrange once the queue is empty
         self.last_install = ("", False, "")  # (name, ok, reason) of the last install, for the summary
         self.checking_updates = False
         self.connection = "unknown"   # online / offline
@@ -132,6 +133,7 @@ class Runtime(QtCore.QObject):
             log.warning("installer", "Stopped with {} queued installs: {}".format(len(self.install_queue),
                                                                                  ", ".join(self.install_queue)))
             self.install_queue = []
+        self._layouts = []
         self.network.stop()
 
     def say(self, text, kind="info", actions=None):
@@ -608,6 +610,46 @@ class Runtime(QtCore.QObject):
         log.info("installer", "Install requested: " + reference)
         return self.install(reference, on_done=self._batch_done)
 
+    def request_layout(self, entries):
+        """A favorite collection arranged as a toolbar on maxpkg.dev (MaxPkg.installLayout): `entries` are package
+        GUIDs and DIVIDER in the owner's order. The packages not installed yet go to the install queue in that order,
+        like installMany; once the queue is empty the toolbar takes the collection's order and dividers. An installed
+        package is not installed again, but its button still moves to its place. Returns how many packages will be
+        installed."""
+        missing = [entry for entry in entries if not is_divider(entry) and self.package(entry) is None]
+        if not missing:
+            log.info("installer", "Every package of the collection is installed: arranging the toolbar")
+            if self.apply_layout(entries):
+                self.say("Every script of this collection is already installed.\nThe toolbar follows the collection's "
+                         "order{}.".format(" and dividers" if any(is_divider(entry) for entry in entries) else ""),
+                         "success")
+            return 0
+        self._layouts.append(list(entries))
+        for guid in missing:
+            self.request_install(guid)
+        return len(missing)
+
+    def apply_layout(self, entries):
+        """Arrange the toolbar as a collection layout has it (see arrange_collection). A locked toolbar keeps its
+        order. The collection's buttons the user had hidden show again: the collection asks for them."""
+        if self.settings.toolbar_locked:
+            log.info("toolbar", "Locked: the collection's order was not applied")
+            self.say("The toolbar is locked, so it keeps its order.\nUnlock it to arrange it like the collection.",
+                     "info")
+            return False
+        for entry in entries:
+            package = None if is_divider(entry) else self.package(entry)
+            if package is not None and self.settings.is_hidden(package.guid):
+                self.settings.set_hidden(package.guid, False)
+
+        def shown(guid):
+            package = self.package(guid)
+            return package is not None and self.is_on_toolbar(package)
+
+        order = arrange_collection(normalized_order(self.packages, self.settings.toolbar_order), entries, shown)
+        log.info("toolbar", "Collection layout applied: " + "; ".join(order))
+        return self.set_full_order(order)
+
     def _next_queued(self):
         if self._stopped or self.operation or not self.install_queue:
             return  # an operation started meanwhile (Update All): its end calls this again
@@ -624,6 +666,9 @@ class Runtime(QtCore.QObject):
         if self.install_queue:
             return
         results, self._batch = self._batch, None
+        layouts, self._layouts = self._layouts, []
+        for entries in layouts:
+            self.apply_layout(entries)  # packages that did not install are left out
         if len(results) < 2:
             return
         missing = [name + (" (" + reason + ")" if reason else "") for name, ok, reason in results if not ok]

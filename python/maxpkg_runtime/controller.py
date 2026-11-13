@@ -11,6 +11,7 @@ from . import qt_compat
 from .domain.api import split_references
 from .domain import self_update as self_update_rules
 from .domain.ini import IniDocument
+from .domain.packages import is_divider, split_layout
 from .qt_compat import QtCore, QtGui, QtWidgets, is_valid, screen_at
 from .services import log, max_api
 from .services.images import ImageService
@@ -266,6 +267,16 @@ class Controller:
             self.open_manager("")
             for reference in references:
                 self.runtime.request_install(reference)
+            return True
+        if command == "installLayout":
+            # A favorite collection arranged as a toolbar on maxpkg.dev: GUIDs and "divider" in the owner's order.
+            entries = split_layout(argument)
+            if not any(not is_divider(entry) for entry in entries):
+                log.warning("facade", "MaxPkg.installLayout without packages: " + argument)
+                return "No packages were given."
+            log.info("installer", "Collection layout requested: " + "; ".join(entries))
+            if self.runtime.request_layout(entries):
+                self.open_manager("")  # its progress and summary, as for installMany
             return True
         if command == "uninstall":
             return bool(self.runtime.uninstall(argument))

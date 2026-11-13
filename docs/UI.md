@@ -57,3 +57,11 @@ Card grids compute their column count from the width (1–4) instead of the fixe
   Update, Move Left/Right, Hide from Toolbar, Toolbar settings; on `maxpkg`: Open Manager, Check Updates (packages
   and the Package Manager), Check Manager Updates (the Package Manager alone), Position, Hide toolbar.
 - Never takes keyboard focus (Max shortcuts keep working).
+- A favorite collection arranged as a toolbar on maxpkg.dev (`MaxPkg.installLayout "divider;GUID;GUID;divider;GUID"`,
+  called by its Install all scripts installer): the packages not installed yet go through the install queue like
+  `installMany`, then the toolbar takes the collection's order and dividers. The user's other buttons keep their
+  places and the collection follows them as one block after a divider; a toolbar with no other buttons takes the
+  layout as it is (a leading divider follows the maxpkg button). Packages that failed or have no toolbar button are
+  left out with no empty divider; buttons of the collection the user had hidden show again; a locked toolbar keeps
+  its order. Installing the same collection again gives the same toolbar. Dividers are the `divider` entries of
+  `[Toolbar] Order`, like those added by hand.

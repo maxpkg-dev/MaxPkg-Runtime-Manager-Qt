@@ -32,6 +32,8 @@ installed keep working offline. On an older 3ds Max, use the
 description, screenshots, videos and a list of what changed in each version.
 
 **Install in one click.** No folders, no copying files. The script appears on your toolbar and it's ready to go.
+Arranged a favourite collection as a toolbar on maxpkg.dev? `Install all scripts` sets up your MaxPkg toolbar the same
+way: the same order, the same dividers.
 
 **Keep your favourites close.** The MaxPkg toolbar holds your scripts. Dock it to any side of the screen or let it
 float, choose big or small buttons, drag them around, hide the ones you don't need.

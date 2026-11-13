@@ -370,6 +370,78 @@ def merge_visible_order(saved_order, visible_new_order, visible_guids):
     return merged
 
 
+# A favorite collection arranged as a toolbar on maxpkg.dev (MaxPkg.installLayout): package GUIDs and dividers.
+LAYOUT_GUID = re.compile(r"^[0-9a-fA-F-]{36}$")  # what the site itself accepts
+LAYOUT_MAX_PACKAGES = 200
+LAYOUT_MAX_DIVIDERS = 50
+
+
+def split_layout(text):
+    """The entries of one MaxPkg.installLayout call: GUIDs and DIVIDER in order, separated by ';' (also ',' or white
+    space). Anything else is ignored, a GUID counts once, dividers never repeat or end the list; a leading divider
+    stays (it follows the maxpkg button)."""
+    entries, seen, dividers = [], set(), 0
+    for part in re.split(r'[;,\s"()#]+', text or ""):
+        if is_divider(part):
+            if (not entries or not is_divider(entries[-1])) and dividers < LAYOUT_MAX_DIVIDERS:
+                entries.append(DIVIDER)
+                dividers += 1
+        elif LAYOUT_GUID.match(part) and part.lower() not in seen and len(seen) < LAYOUT_MAX_PACKAGES:
+            seen.add(part.lower())
+            entries.append(part)
+    while entries and is_divider(entries[-1]):
+        entries.pop()
+    return entries
+
+
+def _tidy_dividers(entries, shown, keep_leading):
+    """`entries` with no divider that separates nothing on the toolbar: none twice in a row (packages not shown in
+    between do not count), none at the end, and none at the start unless `keep_leading`."""
+    result, pending, seen_shown = [], [], False
+    for entry in entries:
+        if is_divider(entry):
+            if not pending and (seen_shown or keep_leading):
+                pending.append(entry)
+            continue
+        if shown(entry):
+            result.extend(pending)
+            pending = []
+            seen_shown = True
+        result.append(entry)
+    return result
+
+
+def arrange_collection(order, layout, shown):
+    """The saved toolbar order with a collection's buttons and dividers as `layout` has them.
+
+    The user's other entries keep their places; the collection's packages leave them and stand together, in the
+    layout's order, after the user's buttons with one divider in between. A toolbar with no other buttons takes the
+    layout as it is, its leading divider (after the maxpkg button) included. A package of the layout that is not
+    installed or not shown on the toolbar is left out, and no divider is left without buttons on both sides.
+    `shown(guid)` tells whether an installed package has a toolbar button. The result is the same when applied twice.
+    """
+    wanted = {entry.lower() for entry in layout if not is_divider(entry)}
+    canonical = {entry.lower(): entry for entry in order if not is_divider(entry)}
+    rest = [entry for entry in order if is_divider(entry) or entry.lower() not in wanted]
+    block, hidden = [], []
+    for entry in layout:
+        if is_divider(entry):
+            block.append(DIVIDER)
+        elif entry.lower() in canonical:
+            (block if shown(canonical[entry.lower()]) else hidden).append(canonical[entry.lower()])
+    leading = bool(layout) and is_divider(layout[0])
+    others_shown = any(not is_divider(entry) and shown(entry) for entry in rest)
+    if others_shown:
+        rest = _tidy_dividers(rest, shown, keep_leading=True)  # the divider after the maxpkg button stays
+        block = _tidy_dividers(block, shown, keep_leading=False)
+        if any(not is_divider(entry) for entry in block):
+            block.insert(0, DIVIDER)
+    else:
+        rest = [entry for entry in rest if not is_divider(entry)]
+        block = _tidy_dividers(block, shown, keep_leading=leading)
+    return rest + block + hidden
+
+
 def toolbar_entries(packages, order, is_hidden):
     """The toolbar line: visible packages (Package objects) and dividers (DIVIDER) in saved order, then visible
     packages missing from the order."""
@@ -399,4 +471,4 @@ def compact_number(value):
 
 __all__ = ["Package", "ChangelogEntry", "Screenshot", "Video", "scan", "read_manifest", "read_mzp_manifest", "is_newer", "changelog_versions", "compatible",
            "supported_versions", "incompatibility", "ordered_for_toolbar", "normalized_order", "with_brand_divider", "merge_visible_order", "compact_number", "to_float", "DIVIDER",
-           "is_divider", "toolbar_entries"]
+           "is_divider", "toolbar_entries", "split_layout", "arrange_collection"]
