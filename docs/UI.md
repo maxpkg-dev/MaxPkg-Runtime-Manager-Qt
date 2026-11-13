@@ -50,7 +50,10 @@ Card grids compute their column count from the width (1–4) instead of the fixe
 - Never rebuilt: buttons are added, removed, reordered and restyled individually.
 - Buttons paint icon, name, version/developer line, update dot; `maxpkg` button shows the update count.
 - Dragging a button reorders it once the press moves past the drag distance; a press that stays put is a click
-  (Alt + drag still starts at once). Live in floating mode; insertion line when docked. Right click: Run, Details,
+  (Alt + drag still starts at once). The button lifts and follows the cursor, the others step aside to show where
+  it will land, and on release it settles with a small bounce and a ring (DragStage paints this over the toolbar; the
+  real buttons move on release; the ring is a RingBurst, a see-through window of its own that never takes the mouse
+  or focus, so the toolbar's edges do not cut it off, the same as the rings around a newly installed script). On a locked toolbar the button shakes and a tooltip says why. Right click: Run, Details,
   Update, Move Left/Right, Hide from Toolbar, Toolbar settings; on `maxpkg`: Open Manager, Check Updates (packages
   and the Package Manager), Check Manager Updates (the Package Manager alone), Position, Hide toolbar.
 - Never takes keyboard focus (Max shortcuts keep working).

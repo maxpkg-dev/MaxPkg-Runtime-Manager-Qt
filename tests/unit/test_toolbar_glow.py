@@ -1,11 +1,11 @@
-"""The toolbar highlight: it waits for the toolbar to be on screen, lights it, rings new buttons, lets removed ones
-shrink away, and fades out. Needs Qt; skipped where there is none."""
+"""The toolbar highlight: it waits for the toolbar to be on screen, lights it, rings new buttons (in windows of their
+own, so nothing cuts the rings off), lets a laser erase removed ones, and fades out. Needs Qt; skipped where there is none."""
 
 import unittest
 
 try:
     from maxpkg_runtime.qt_compat import QtCore, QtGui, QtWidgets
-    from maxpkg_runtime.ui.toolbar import InsertionLine, ToolbarGlow
+    from maxpkg_runtime.ui.toolbar import ACCENT, ToolbarGlow
 except ImportError:
     QtWidgets = None
 
@@ -82,7 +82,10 @@ class ToolbarGlowTests(unittest.TestCase):
         glow._animation.setCurrentTime(ToolbarGlow.DURATION)
         self.assertFalse(glow.isVisible())
 
-    def test_rings_a_new_button(self):
+    def global_rect(self, x, y, width, height):
+        return QtCore.QRect(self.host.mapToGlobal(QtCore.QPoint(x, y)), QtCore.QSize(width, height))
+
+    def test_rings_a_new_button_in_windows_of_their_own(self):
         self.host.show()
         button = QtWidgets.QWidget(self.host)
         button.setGeometry(200, 5, 30, 30)
@@ -90,24 +93,29 @@ class ToolbarGlowTests(unittest.TestCase):
         glow = ToolbarGlow(self.host)
         glow.play(False, ToolbarGlow.SOFT, [button])
         image = self.frame(glow, 0.2)
-        around = QtCore.QRect(188, 0, 54, 40)
-        far = QtCore.QRect(300, 0, 54, 40)
-        self.assertGreater(mean_alpha(image, around), 1.5 * mean_alpha(image, far))
+        self.assertGreater(mean_alpha(image, QtCore.QRect(200, 5, 30, 30)), 1.5 * mean_alpha(image, QtCore.QRect(300, 5, 30, 30)))
+        self.assertEqual(len(glow.bursts), len(ToolbarGlow.RING_DELAYS))
+        first = glow.bursts[0]
+        self.assertTrue(first.isVisible())  # the first ring starts at once, the second a moment later
+        self.assertTrue(first.isWindow())
+        self.assertEqual(QtCore.QRectF(first.place).toRect(), self.global_rect(200, 5, 30, 30))
+        self.assertLess(first.geometry().top(), self.host.geometry().top())  # it reaches past the toolbar's edges
+        self.assertGreater(first.geometry().bottom(), self.host.geometry().bottom())
 
     def test_rings_the_overflow_button_when_the_new_button_is_hidden_in_it(self):
         self.host.show()
         hidden = QtWidgets.QWidget(self.host)
         hidden.setGeometry(380, 5, 30, 30)  # a crowded toolbar put it in the >> menu
+        hidden.hide()
         overflow = QtWidgets.QToolButton(self.host)
         overflow.setObjectName("qt_toolbar_ext_button")
         overflow.setGeometry(200, 5, 14, 30)
         overflow.show()
         glow = ToolbarGlow(self.host)
         glow.play(False, ToolbarGlow.SOFT, [hidden])
+        self.assertEqual(QtCore.QRectF(glow.bursts[0].place).toRect(), self.global_rect(200, 5, 14, 30))
         image = self.frame(glow, 0.2)
-        around = QtCore.QRect(188, 0, 38, 40)
-        far = QtCore.QRect(300, 0, 38, 40)
-        self.assertGreater(mean_alpha(image, around), 1.5 * mean_alpha(image, far))
+        self.assertGreater(mean_alpha(image, QtCore.QRect(200, 5, 14, 30)), 1.5 * mean_alpha(image, QtCore.QRect(300, 5, 14, 30)))
 
     def removed(self, vertical, place):
         self.host.show()
@@ -150,7 +158,7 @@ class ToolbarGlowTests(unittest.TestCase):
         self.assertEqual(mean_alpha(self.frame(glow, 1.0), QtCore.QRect(94, 0, 14, 40)), 0)
 
     def test_uses_the_toolbar_accent(self):
-        self.assertEqual(QtGui.QColor(InsertionLine.ACCENT).name(), "#3af1c5")
+        self.assertEqual(QtGui.QColor(ACCENT).name(), "#3af1c5")
 
 
 if __name__ == "__main__":

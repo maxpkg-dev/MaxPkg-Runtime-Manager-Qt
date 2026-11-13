@@ -111,12 +111,18 @@ class ToolbarButton(QtWidgets.QAbstractButton):
         self.locked = False  # Toolbar lock: no drag reorder (set by ToolbarController)
         self.vanished = False  # removed: it keeps its place, unpainted, while the laser erases its picture
         self.closing = 1.0  # share of its place a removed button still takes while that place closes
+        self.staged = False  # a reorder is animated over the toolbar: DragStage paints its picture instead
         self.setFocusPolicy(Qt.NoFocus)
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_Hover)
         self._dragging = False
         self._press_point = None  # global point of a plain press that may still become a drag
         self._cancelled = False  # the current press was dragged on a locked toolbar
+        self._shake = QtCore.QVariantAnimation(self)  # the toolbar is locked: the button shakes "no"
+        self._shake.setStartValue(0.0)
+        self._shake.setEndValue(1.0)
+        self._shake.setDuration(SHAKE_MS)
+        self._shake.valueChanged.connect(lambda _value: self.update())
         if images is not None and not brand:
             images.ready.connect(self._on_image)
         self.apply(item, style, toolbar_theme)
@@ -193,12 +199,15 @@ class ToolbarButton(QtWidgets.QAbstractButton):
 
     # --- painting -----------------------------------------------------------------
     def paintEvent(self, _event):
-        if self.vanished:
+        if self.vanished or self.staged:
             return
         theme = self.theme
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        if self._shake.state() == QtCore.QAbstractAnimation.Running:
+            offset = shake_offset(float(self._shake.currentValue()))
+            painter.translate(0, offset) if self.style_info.vertical else painter.translate(offset, 0)
         hovered = self.underMouse() or self.isDown() or self._dragging
         style = self.style_info
         frame = QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
@@ -343,12 +352,18 @@ class ToolbarButton(QtWidgets.QAbstractButton):
             if event.modifiers() & Qt.AltModifier:
                 if self.locked:
                     show_locked_hint(event)
+                    self.shake()
                 else:
                     self._start_drag()
                 event.accept()
                 return
             self._press_point = event_global_pos(event)
         QtWidgets.QAbstractButton.mousePressEvent(self, event)
+
+    def shake(self):
+        """The toolbar is locked: the button shakes side to side a moment, like a head saying no."""
+        self._shake.stop()
+        self._shake.start()
 
     def _start_drag(self):
         self._dragging = True
@@ -363,6 +378,7 @@ class ToolbarButton(QtWidgets.QAbstractButton):
                 self._press_point = None
                 if self.locked:
                     show_locked_hint(event)
+                    self.shake()
                     self._cancelled = True  # a drag on a locked toolbar is neither a move nor a click
                     self.setDown(False)
                 else:
@@ -392,6 +408,12 @@ class ToolbarButton(QtWidgets.QAbstractButton):
 
 
 LOCKED_HINT = "The toolbar is locked. Right-click it and choose Unlock Toolbar to arrange it."
+SHAKE_MS = 480
+
+
+def shake_offset(progress):
+    """px a shaking button moves at `progress` (0..1) of its shake: three swings that die down."""
+    return math.sin(progress * math.pi * 6) * 3.5 * (1.0 - progress)
 
 
 def show_locked_hint(event):
@@ -412,6 +434,7 @@ class ToolbarDivider(QtWidgets.QWidget):
         self.setAttribute(Qt.WA_Hover)  # the normal arrow on hover; a closed hand only while it is dragged
         self._dragging = False
         self.locked = False
+        self.staged = False  # see ToolbarButton.staged
         self.apply(style, toolbar_theme)
 
     def apply(self, style, toolbar_theme):
@@ -424,6 +447,8 @@ class ToolbarDivider(QtWidgets.QWidget):
     def paintEvent(self, _event):
         """Etched like 3ds Max's own toolbar separators: a dark and a light 1 px line side by side, half the button
         height, so it reads on any toolbar color. Under the mouse or while dragged both lines brighten."""
+        if self.staged:
+            return
         painter = QtGui.QPainter(self)
         active = self.underMouse() or self._dragging
         background = QtGui.QColor(self.theme.color("toolbarBackground"))
@@ -514,59 +539,7 @@ class ButtonStrip(QtWidgets.QWidget):
         return len(self.buttons)
 
 
-class InsertionLine(QtWidgets.QWidget):
-    """Where a dragged button will land on the docked toolbar: a glowing accent bar across the line of buttons
-    with a round dot at each end, the same marker the Manager shows between Installed cards."""
-
-    ACCENT = "#3af1c5"
-    WIDTH = 12  # the glow; the bar itself is 2.5 px in the middle
-    DOT = 3.5  # radius of the end dots
-
-    def __init__(self, parent):
-        QtWidgets.QWidget.__init__(self, parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.vertical_toolbar = False  # the bar runs across the toolbar: horizontal on a vertical toolbar
-        self.ring = QtGui.QColor("#444444")
-        self.hide()
-
-    def show_at(self, position, start, length, vertical_toolbar, ring):
-        """`position`: the gap along the toolbar; `start`/`length`: the span of the buttons across it."""
-        self.vertical_toolbar = vertical_toolbar
-        self.ring = ring
-        half = self.WIDTH // 2
-        if vertical_toolbar:
-            self.setGeometry(start, position - half, length, self.WIDTH)
-        else:
-            self.setGeometry(position - half, start, self.WIDTH, length)
-        self.raise_()
-        self.show()
-        self.update()
-
-    def paintEvent(self, _event):
-        accent = QtGui.QColor(self.ACCENT)
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        if self.vertical_toolbar:  # paint as for a horizontal toolbar, rotated a quarter turn
-            painter.translate(self.width(), 0)
-            painter.rotate(90)
-        across, along = (self.height(), self.width()) if self.vertical_toolbar else (self.width(), self.height())
-        middle = across / 2.0
-        glow = QtGui.QLinearGradient(0, 0, across, 0)
-        for stop, alpha in ((0.0, 0.0), (0.5, 0.3), (1.0, 0.0)):
-            color = QtGui.QColor(accent)
-            color.setAlphaF(alpha)
-            glow.setColorAt(stop, color)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QtGui.QBrush(glow))
-        painter.drawRoundedRect(QtCore.QRectF(0, self.DOT, across, along - 2 * self.DOT), middle, middle)
-        top, bottom = self.DOT + 1.0, along - self.DOT - 1.0
-        painter.setBrush(accent)
-        painter.drawRoundedRect(QtCore.QRectF(middle - 1.25, top, 2.5, bottom - top), 1.25, 1.25)
-        # Round ends: an accent dot with a ring of the toolbar color, so they read on buttons and gaps alike.
-        painter.setPen(QtGui.QPen(self.ring, 1.25))
-        for y in (top, bottom):
-            painter.drawEllipse(QtCore.QPointF(middle, y), self.DOT, self.DOT)
-        painter.end()
+ACCENT = "#3af1c5"  # toolbar highlights, the same accent the Manager's markers use
 
 
 def _ease_in_out(value):
@@ -574,9 +547,107 @@ def _ease_in_out(value):
     return value * value * (3.0 - 2.0 * value)
 
 
+def _ease_out(value):
+    value = max(0.0, min(1.0, value))
+    return 1.0 - (1.0 - value) ** 3
+
+
+class RingBurst(QtWidgets.QWidget):
+    """One accent ring that spreads out from a button and fades. It has a small see-through window of its own, a little
+    bigger than the button: drawn inside the toolbar, the ring would be cut off at the toolbar's edges. The window never
+    takes the mouse or the focus, follows the button if the toolbar moves it, and closes itself when the ring is gone
+    (or the button is)."""
+
+    MARGIN = 16  # px around the button: room for the ring at its widest
+    FRAME_MS = 16
+
+    def __init__(self, anchor, locate, delay=0, duration=600, spread=9.0, width=2.0):
+        """`locate()` gives the button's place on screen now (a global QRectF), or None when it is gone."""
+        QtWidgets.QWidget.__init__(self, anchor.window(), Qt.Tool | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+                                   | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_NoSystemBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.locate = locate
+        self.duration = max(1, int(duration))
+        self.spread = float(spread)
+        self.pen_width = float(width)
+        self.progress = 0.0
+        self.place = None  # the button's global QRectF the window was last fitted to
+        self._clock = QtCore.QElapsedTimer()
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(self.FRAME_MS)
+        self._timer.timeout.connect(self._tick)
+        if delay > 0:
+            self._wait = QtCore.QTimer(self)
+            self._wait.setSingleShot(True)
+            self._wait.timeout.connect(self._start)
+            self._wait.start(int(delay))
+        else:
+            self._start()
+
+    def _fit(self):
+        """Fit the window around the button; False while it is not on screen."""
+        try:
+            place = self.locate()
+        except RuntimeError:  # its widgets were deleted
+            place = None
+        if place is None or place.isEmpty():
+            return False
+        if place != self.place:
+            self.place = QtCore.QRectF(place)
+            self.setGeometry(place.adjusted(-self.MARGIN, -self.MARGIN, self.MARGIN, self.MARGIN).toAlignedRect())
+        return True
+
+    def _start(self):
+        self._clock.start()
+        self._timer.start()
+        self._tick()
+
+    def _tick(self):
+        """A new button may be laid out a moment after this starts: the ring waits for it, within its own time."""
+        self.progress = self._clock.elapsed() / float(self.duration)
+        located = self.progress < 1.0 and self._fit()
+        if not located and (self.progress >= 1.0 or self.isVisible()):
+            self._timer.stop()
+            self.close()
+            return
+        if located and not self.isVisible():
+            self.show()
+            self.raise_()
+        self.update()
+
+    def ring(self):
+        """The ring now, in this window: (rect, corner radius, opacity)."""
+        grow = 2.0 + self.spread * _ease_out(self.progress)
+        button = QtCore.QRectF(self.MARGIN, self.MARGIN, self.place.width(), self.place.height())
+        return button.adjusted(-grow, -grow, grow, grow), 4.0 + grow, max(0.0, 1.0 - self.progress)
+
+    def paintEvent(self, _event):
+        if self.place is None:
+            return
+        rect, radius, opacity = self.ring()
+        color = QtGui.QColor(ACCENT)
+        color.setAlphaF(opacity)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtGui.QPen(color, self.pen_width))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(rect, radius, radius)
+        painter.end()
+
+
+def _global_rect(widget):
+    return QtCore.QRectF(QtCore.QPointF(widget.mapToGlobal(QtCore.QPoint(0, 0))), QtCore.QSizeF(widget.size()))
+
+
 class ToolbarGlow(QtWidgets.QWidget):
     """Draws the eye to the toolbar. When it appears, moves or changes its look: an accent wash that a bright band
-    sweeps along once, then fades out. A new button: a softer wash and two expanding rings around it. A removed button:
+    sweeps along once, then fades out. A new button: a softer wash and two rings that spread out from it (RingBursts, so
+    the toolbar's edges do not cut them off). A removed button:
     a picture of it fades in its still empty place while a glowing laser line crosses it from its end to its start
     (right to left; bottom to top on a vertical toolbar) and erases what it passed; the line stops where the place
     closes and stays there a moment as the mark of where the button was.
@@ -585,6 +656,7 @@ class ToolbarGlow(QtWidgets.QWidget):
 
     DURATION = 1600  # ms
     PULSE = 0.55  # share of the duration one ring takes
+    RING_DELAYS = (0.0, 0.3)  # shares of the duration after which each of the two rings starts
     ERASE = 0.4  # share of the duration the laser takes to erase a removed button
     LASER_GLOW = 14.0  # px: the soft light around the laser line
     LASER_CORE = "#eafff9"  # the line's hot middle
@@ -600,6 +672,7 @@ class ToolbarGlow(QtWidgets.QWidget):
         self.rings = []  # new buttons, measured on every frame: the toolbar lays them out after this starts
         self.gaps = []  # (offset along the toolbar, start across it, length across it)
         self.ghosts = []  # (picture, QRectF in this widget) of removed buttons
+        self.bursts = []  # the RingBursts this started
         self.progress = 1.0
         self._tries = 0
         self._animation = QtCore.QVariantAnimation(self)
@@ -635,6 +708,28 @@ class ToolbarGlow(QtWidgets.QWidget):
         self.raise_()
         self.show()
         self._animation.start()
+        self.bursts = [burst for burst in self.bursts if is_valid(burst)]
+        for widget in self.rings:
+            for delay in self.RING_DELAYS:
+                self.bursts.append(RingBurst(host, self._ring_locator(widget), delay=delay * self.DURATION,
+                                             duration=self.PULSE * self.DURATION, spread=10.0, width=2.5))
+
+    def _ring_target(self, widget):
+        """The widget to ring for a new button: the button, or the >> button of a crowded line it was pushed into."""
+        host = self.parentWidget()
+        if host is None or not is_valid(host):
+            return None
+        # isVisibleTo, not isVisible: 3ds Max 2022 reports a button the line pushed into >> as visible
+        if is_valid(widget) and widget.isVisibleTo(host):
+            return widget
+        overflow = host.findChild(QtWidgets.QToolButton, "qt_toolbar_ext_button")
+        return overflow if overflow is not None and overflow.isVisible() else None
+
+    def _ring_locator(self, widget):
+        def locate():
+            target = self._ring_target(widget) if is_valid(self) else None
+            return _global_rect(target) if target is not None and target.window().isVisible() else None
+        return locate
 
     def _step(self, value):
         self.progress = float(value)
@@ -646,7 +741,7 @@ class ToolbarGlow(QtWidgets.QWidget):
     def paintEvent(self, _event):
         x = self.progress
         fade = 1.0 - x
-        accent = QtGui.QColor(InsertionLine.ACCENT)
+        accent = QtGui.QColor(ACCENT)
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         rect = QtCore.QRectF(self.rect())
@@ -673,32 +768,20 @@ class ToolbarGlow(QtWidgets.QWidget):
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(rect.adjusted(1, 1, -1, -1))
         host = self.parentWidget()
-        overflow = host.findChild(QtWidgets.QToolButton, "qt_toolbar_ext_button") if host is not None else None
         targets = []
         for widget in self.rings:
-            # isVisibleTo, not isVisible: 3ds Max 2022 reports a button the line pushed into >> as visible
-            if is_valid(widget) and host is not None and widget.isVisibleTo(host):
-                targets.append(widget)
-            elif overflow is not None and overflow.isVisible() and overflow not in targets:
-                targets.append(overflow)  # the new button is in the >> menu of a crowded toolbar line: point there
+            target = self._ring_target(widget)
+            if target is not None and target not in targets:
+                targets.append(target)
         for widget in targets:
-            if host is None:
-                continue
+            # Only the light inside the button is drawn here; the rings that spread past it are RingBursts, each in a
+            # window of its own, or the toolbar's edges would cut them off.
             ring = QtCore.QRectF(QtCore.QPointF(widget.mapTo(host, QtCore.QPoint(0, 0))), QtCore.QSizeF(widget.size()))
             glow = QtGui.QColor(accent)
             glow.setAlphaF(0.3 * fade)
             painter.setPen(Qt.NoPen)
             painter.setBrush(glow)
             painter.drawRoundedRect(ring, 4, 4)
-            for delay in (0.0, 0.3):
-                pulse = (x - delay) / self.PULSE
-                if 0.0 <= pulse < 1.0:
-                    grow = 2.0 + 10.0 * (1.0 - (1.0 - pulse) ** 3)
-                    color = QtGui.QColor(accent)
-                    color.setAlphaF(1.0 - pulse)
-                    painter.setPen(QtGui.QPen(color, 2.5))
-                    painter.setBrush(Qt.NoBrush)
-                    painter.drawRoundedRect(ring.adjusted(-grow, -grow, grow, grow), 4 + grow, 4 + grow)
         erase = min(1.0, x / self.ERASE)
         wiped = _ease_in_out(erase)
         for picture, place in self.ghosts:
@@ -726,7 +809,7 @@ class ToolbarGlow(QtWidgets.QWidget):
         removed button and the mark it leaves where the button was."""
         if strength <= 0.0:
             return
-        accent = QtGui.QColor(InsertionLine.ACCENT)
+        accent = QtGui.QColor(ACCENT)
 
         def area(along, along_size, across, across_size):
             return (QtCore.QRectF(across, along, across_size, along_size) if self.vertical
@@ -754,6 +837,211 @@ class ToolbarGlow(QtWidgets.QWidget):
         painter.restore()
 
 
+class DragStage(QtWidgets.QWidget):
+    """Reordering by drag, animated over the toolbar. The dragged button lifts, grows a little and follows the cursor;
+    the others step aside, so the gap shows where it will land; on release it glides in, bounces once and a ring
+    spreads from it. Meanwhile the real buttons stay where they are, unpainted (`staged`): a docked QToolBar cannot
+    move a QWidgetAction while its widget holds the mouse grab. They show again, in their new places, once all has
+    settled. It covers the toolbar and never takes the mouse."""
+
+    LIFT = 2.5  # px the dragged button rises off the line of buttons (a docked line has little room above it)
+    GROW = 0.1  # how much bigger it gets while lifted
+    FOLLOW = 0.35  # share of the way to its new place a stepping-aside button covers each frame
+    LIFT_MS = 120
+    LAND_MS = 180
+    BOUNCE_MS = 260
+    RING_MS = 600  # the ring spreading from a landed button (a RingBurst: it outlives the stage)
+    FRAME_MS = 16
+
+    def __init__(self, host):
+        QtWidgets.QWidget.__init__(self, host)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_NoSystemBackground)  # only what paintEvent draws: the toolbar shows through
+        self.setAutoFillBackground(False)
+        self.vertical = False
+        self.items = []  # [widget, picture, home QRectF in this widget, offset along the toolbar now]
+        self.dragged = None  # the entry of the dragged widget
+        self.slots = {}  # id(widget) -> offset along the toolbar it is heading for
+        self.gap = 0.0
+        self.grip = None  # cursor offset into the dragged button along the toolbar, from the first move
+        self.cursor_along = 0.0
+        self.phase = ""  # "" | "drag" | "land"
+        self.burst = None  # the RingBurst of the last landing
+        self._landed_from = 0.0
+        self._clock = QtCore.QElapsedTimer()
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(self.FRAME_MS)
+        self._timer.timeout.connect(self._tick)
+        self.hide()
+
+    @property
+    def active(self):
+        return bool(self.phase)
+
+    def _along(self, rect):
+        return rect.top() if self.vertical else rect.left()
+
+    def _length(self, rect):
+        return rect.height() if self.vertical else rect.width()
+
+    def begin(self, widgets, dragged, vertical):
+        """Take pictures of the `widgets` on screen and paint them from now on; False when `dragged` is not among them."""
+        self.finish()
+        host = self.parentWidget()
+        if host is None:
+            return False
+        self.vertical = vertical
+        for widget in widgets:
+            if not is_valid(widget) or not widget.isVisibleTo(host):
+                continue  # in the >> menu of a crowded toolbar line
+            corner = widget.mapTo(host, QtCore.QPoint(0, 0))
+            home = QtCore.QRectF(QtCore.QPointF(corner), QtCore.QSizeF(widget.size()))
+            self.items.append([widget, widget.grab(), home, self._along(home)])
+        self.dragged = next((item for item in self.items if item[0] is dragged), None)
+        if self.dragged is None:
+            self.items = []
+            return False
+        homes = sorted((item[2] for item in self.items), key=self._along)
+        self.gap = max(0.0, self._along(homes[1]) - self._along(homes[0]) - self._length(homes[0])) if len(homes) > 1 else 0.0
+        self.slots = {id(item[0]): item[3] for item in self.items}
+        self.grip = None
+        for item in self.items:
+            item[0].staged = True
+            item[0].update()
+        self.phase = "drag"
+        self._clock.start()
+        self.setGeometry(host.rect())
+        self.raise_()
+        self.show()
+        self._timer.start()
+        return True
+
+    def arrange(self, order):
+        """Where each pictured widget goes when the widgets stand in `order` (which may hold widgets not pictured)."""
+        pictured = {id(item[0]): item for item in self.items}
+        position = min(self._along(item[2]) for item in self.items)
+        slots = {}
+        for widget in order:
+            item = pictured.get(id(widget))
+            if item is not None:
+                slots[id(widget)] = position
+                position += self._length(item[2]) + self.gap
+        self.slots = slots
+
+    def drag(self, global_point, order):
+        local = self.mapFromGlobal(global_point)
+        along = float(local.y() if self.vertical else local.x())
+        if self.grip is None:
+            self.grip = along - self._along(self.dragged[2])
+        self.cursor_along = along
+        self.arrange(order)
+
+    def drop(self, order):
+        """The mouse let go: the dragged button glides to its place in `order` (its old place when nothing moved)."""
+        if not self.active:
+            return
+        self.arrange(order)
+        self.phase = "land"
+        self._landed_from = self.dragged[3]
+        self._clock.restart()
+        home = self.dragged[2]
+        slot = self.slots.get(id(self.dragged[0]), self.dragged[3])
+        place = home.translated(0, slot - home.top()) if self.vertical else home.translated(slot - home.left(), 0)
+        host = self.parentWidget()
+        if host is not None:
+            # In a window of its own: drawn here, the ring would be cut off at the toolbar's edges.
+            self.burst = RingBurst(host, self._place_locator(place), delay=self.LAND_MS, duration=self.RING_MS,
+                                   spread=9.0, width=2.0)
+
+    def _place_locator(self, place):
+        def locate():
+            if not is_valid(self) or not self.window().isVisible():
+                return None
+            return QtCore.QRectF(QtCore.QPointF(self.mapToGlobal(place.topLeft().toPoint())), place.size())
+        return locate
+
+    def finish(self):
+        """All has landed: the real buttons, already in their new places, show again."""
+        self._timer.stop()
+        for item in self.items:
+            if is_valid(item[0]):
+                item[0].staged = False
+                item[0].update()
+        self.items = []
+        self.dragged = None
+        self.phase = ""
+        self.hide()
+
+    def _tick(self):
+        elapsed = self._clock.elapsed()
+        settled = True
+        for item in self.items:
+            if item is self.dragged:
+                continue
+            target = self.slots.get(id(item[0]), item[3])
+            item[3] += (target - item[3]) * self.FOLLOW
+            if abs(target - item[3]) < 0.3:
+                item[3] = target
+            else:
+                settled = False
+        if self.phase == "drag":
+            if self.grip is not None:
+                first = min(self.slots.values())
+                last = max(self.slots.values())
+                self.dragged[3] = max(first, min(last, self.cursor_along - self.grip))
+        elif self.phase == "land":
+            share = min(1.0, elapsed / float(self.LAND_MS))
+            target = self.slots.get(id(self.dragged[0]), self.dragged[3])
+            self.dragged[3] = self._landed_from + (target - self._landed_from) * (1.0 - (1.0 - share) ** 3)
+            if settled and elapsed >= self.LAND_MS + self.BOUNCE_MS:
+                self.finish()
+                return
+        self.update()
+
+    def _placed(self, item):
+        home = item[2]
+        return home.translated(0, item[3] - home.top()) if self.vertical else home.translated(item[3] - home.left(), 0)
+
+    def paintEvent(self, _event):
+        if not self.items:
+            return
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        for item in self.items:
+            if item is not self.dragged:
+                painter.drawPixmap(self._placed(item), item[1], QtCore.QRectF(item[1].rect()))
+        elapsed = self._clock.elapsed()
+        if self.phase == "drag":
+            lift = min(1.0, elapsed / float(self.LIFT_MS))
+            grow = 1.0 + self.GROW * lift
+        else:
+            landing = min(1.0, elapsed / float(self.LAND_MS))
+            lift = 1.0 - landing
+            bounce = (elapsed - self.LAND_MS) / float(self.BOUNCE_MS)
+            grow = 1.0 + self.GROW * lift + (0.08 * math.sin(bounce * math.pi) if 0.0 <= bounce < 1.0 else 0.0)
+        place = self._placed(self.dragged)
+        across = -self.LIFT * lift
+        # A soft shadow under a lifted button, offset away from the way it rises. A divider is two thin lines over the
+        # toolbar: a shadow under it would read as a dark bar.
+        if lift > 0.0 and not isinstance(self.dragged[0], ToolbarDivider):
+            shadow = QtGui.QColor(0, 0, 0)
+            shadow.setAlphaF(0.3 * lift)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(shadow)
+            drop = 2.0 * lift
+            painter.drawRoundedRect(place.translated(drop, 0) if self.vertical else place.translated(0, drop), 4, 4)
+        painter.save()
+        center = place.center()
+        painter.translate(center.x() + (across if self.vertical else 0.0), center.y() + (0.0 if self.vertical else across))
+        painter.scale(grow, grow)
+        picture = self.dragged[1]
+        painter.drawPixmap(QtCore.QRectF(-place.width() / 2, -place.height() / 2, place.width(), place.height()), picture,
+                           QtCore.QRectF(picture.rect()))
+        painter.restore()
+        painter.end()
+
+
 class DockedStrip:
     """Buttons of the docked QToolBar, one QWidgetAction each, so Qt's own overflow chevron
     can move individual buttons into its popup when the toolbar line is too short."""
@@ -765,7 +1053,6 @@ class DockedStrip:
         self.style_info = None
         self._actions = {}
         self._order = []
-        self.indicator = InsertionLine(toolbar)
 
     def _action(self, widget):
         action = self._actions.get(id(widget))
@@ -803,26 +1090,6 @@ class DockedStrip:
             if button.isVisible() and coordinate < middle:
                 return index
         return len(self.buttons)
-
-    def show_indicator(self, index):
-        visible = [button for button in self.buttons if button.isVisible()]
-        if not visible:
-            return
-        vertical = self.toolbar.orientation() == Qt.Vertical
-        if index < len(self.buttons):
-            reference = self.buttons[index].geometry()
-            offset = reference.top() - 1 if vertical else reference.left() - 1
-        else:
-            reference = visible[-1].geometry()
-            offset = reference.bottom() + 2 if vertical else reference.right() + 2
-        ring = QtGui.QColor(visible[0].theme.color("toolbarBackground"))
-        if vertical:
-            self.indicator.show_at(offset, reference.left(), reference.width(), True, ring)
-        else:
-            self.indicator.show_at(offset, reference.top(), reference.height(), False, ring)
-
-    def hide_indicator(self):
-        self.indicator.hide()
 
 
 class FloatingHost(QtWidgets.QWidget):
@@ -931,6 +1198,7 @@ class ToolbarController(QtCore.QObject):
         self._dividers = []
         self._drag_order = None
         self._glow = None
+        self._stage = None  # DragStage: animates reordering by drag
         self._look = None  # what the buttons looked like at the last sync: a change lights the toolbar up
         self._departing = {}  # guid -> (removed button still holding its place, guid of the button before it)
         self._closing = []  # animations closing the places of removed buttons
@@ -976,6 +1244,7 @@ class ToolbarController(QtCore.QObject):
         self._buttons = {}
         self._dividers = []
         self._glow = None  # a child of the host, gone with it
+        self._stage = None  # the same
         self._departing = {}
         self._mode = ""
 
@@ -1390,45 +1659,46 @@ class ToolbarController(QtCore.QObject):
 
     # --- reorder ----------------------------------------------------------------------
     def _on_alt_drag(self, button, global_point):
-        """Floating strip: buttons move live. Docked toolbar: an insertion line, applied on release
-        (moving a QWidgetAction while its widget holds the mouse grab would cancel the drag)."""
+        """The dragged button lifts and follows the cursor while the others step aside (DragStage paints it over the
+        toolbar); the new order is applied on release, while it lands. Moving a docked QWidgetAction while its widget
+        holds the mouse grab would cancel the drag, so the real buttons stay put until then, on both kinds of toolbar."""
         strip = self.strip
-        docked = isinstance(strip, DockedStrip)
+        stage = self._drag_stage()
         if global_point is None:
-            target = self._drag_order
+            order = self._order_with(button, self._drag_order)
             self._drag_order = None
-            if docked:
-                strip.hide_indicator()
-                if target is not None:
-                    order = list(strip.buttons)
-                    current = order.index(button)
-                    order.pop(current)
-                    order.insert(target - 1 if target > current else target, button)
-                    undo = self._undo_order()  # the saved order changes only now
-                    if self.runtime.set_toolbar_order([widget.item.guid for widget in order]):
-                        self.feedback("Moved {}.".format(self._entry_name(button.item.guid)), action=undo)
-            elif target:
-                undo = self._undo_order()
-                if self.runtime.set_toolbar_order([widget.item.guid for widget in strip.buttons]):
+            if stage is not None:
+                stage.drop(order or list(strip.buttons))
+            if order is not None:
+                undo = self._undo_order()  # the saved order changes only now
+                if self.runtime.set_toolbar_order([widget.item.guid for widget in order]):
                     self.feedback("Moved {}.".format(self._entry_name(button.item.guid)), action=undo)
             return
+        if stage is not None and not stage.active:
+            stage.begin(list(strip.buttons), button, strip.style_info.vertical if strip.style_info else False)
         target = strip.index_at(global_point)
         current = strip.buttons.index(button)
-        if docked:
-            moves = target not in (current, current + 1)
-            self._drag_order = target if moves else None
-            if moves:
-                strip.show_indicator(target)
-            else:
-                strip.hide_indicator()
-            return
-        if target > current:
-            target -= 1
-        if target != current:
-            strip.buttons.pop(current)
-            strip.buttons.insert(target, button)
-            strip.relayout()
-            self._drag_order = True
+        self._drag_order = target if target not in (current, current + 1) else None
+        if stage is not None and stage.active:
+            stage.drag(global_point, self._order_with(button, self._drag_order) or list(strip.buttons))
+
+    def _order_with(self, button, target):
+        """The strip's widgets with `button` moved before index `target` (as index_at counts), or None for no move."""
+        if target is None or self.strip is None or button not in self.strip.buttons:
+            return None
+        order = list(self.strip.buttons)
+        current = order.index(button)
+        order.pop(current)
+        order.insert(target - 1 if target > current else target, button)
+        return order
+
+    def _drag_stage(self):
+        host = self._host()
+        if not is_valid(host):
+            return None
+        if self._stage is None or not is_valid(self._stage):
+            self._stage = DragStage(host)
+        return self._stage
 
     # --- menus ------------------------------------------------------------------------
     def _package_menu(self, guid):
