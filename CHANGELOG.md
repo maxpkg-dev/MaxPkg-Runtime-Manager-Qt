@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.5
+
+- Changed: A new install updates scripts automatically: Download updates automatically is on by default, and the welcome window starts with Automatically chosen. If you already chose, your choice stays.
+- Fixed: Download updates automatically now installs the updates the automatic check finds, one after another, each with its own message. Before, it only found them.
+
 ## 2.1.4
 
 - Added: A favorite collection arranged as a toolbar on maxpkg.dev installs with the same order and dividers. Your other toolbar buttons keep their places and the collection follows them after a divider; on a toolbar with no other buttons it is set up exactly as on the site. Scripts already installed are not installed again, only moved into place, and installing the collection again gives the same toolbar.
