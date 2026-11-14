@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.6
+
+- Changed: The toolbar highlight lights only your buttons, not the empty rest of a docked toolbar. Instead of a box it shows two thin lines along the toolbar that fade out at the ends, and the sweep stays on the buttons.
+
 ## 2.1.5
 
 - Changed: A new install updates scripts automatically: Download updates automatically is on by default, and the welcome window starts with Automatically chosen. If you already chose, your choice stays.
