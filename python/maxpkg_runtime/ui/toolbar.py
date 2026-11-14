@@ -646,8 +646,11 @@ def _global_rect(widget):
 
 class ToolbarGlow(QtWidgets.QWidget):
     """Draws the eye to the toolbar. When it appears, moves or changes its look: an accent wash that a bright band
-    sweeps along once, then fades out. A new button: a softer wash and two rings that spread out from it (RingBursts, so
-    the toolbar's edges do not cut them off). A removed button:
+    sweeps along once, then fades out. It lights only the stretch with buttons (not the empty rest of a docked
+    toolbar) and draws no box around it: two thin lines along the toolbar mark it (top and bottom; left and right on
+    a vertical toolbar), and the lines, the wash and the band all fade out toward both ends. A new button: a softer
+    wash and two rings that spread out from it (RingBursts, so the toolbar's edges do not cut them off). A removed
+    button:
     a picture of it fades in its still empty place while a glowing laser line crosses it from its end to its start
     (right to left; bottom to top on a vertical toolbar) and erases what it passed; the line stops where the place
     closes and stays there a moment as the mark of where the button was.
@@ -661,6 +664,9 @@ class ToolbarGlow(QtWidgets.QWidget):
     LASER_GLOW = 14.0  # px: the soft light around the laser line
     LASER_CORE = "#eafff9"  # the line's hot middle
     STRONG, SOFT, NONE = 1.0, 0.55, 0.0  # strength of the wash: appeared, moved or restyled; a new button; a removed one
+    PAD = 3  # px around the buttons the light reaches
+    EDGE_FADE = 0.18  # share of the lit stretch, at each end, over which it fades out
+    LINE_WIDTH = 2  # px: the lines along the toolbar (never thicker)
 
     def __init__(self, host):
         QtWidgets.QWidget.__init__(self, host)
@@ -731,6 +737,83 @@ class ToolbarGlow(QtWidgets.QWidget):
             return _global_rect(target) if target is not None and target.window().isVisible() else None
         return locate
 
+    def lit_rect(self):
+        """Where the light goes: around the maxpkg button, the buttons and dividers on screen and the >> button,
+        measured now (a new button may be laid out while it plays); the whole toolbar when it has none of them."""
+        host = self.parentWidget()
+        whole = self.rect()
+        if host is None or not is_valid(host):
+            return whole
+        box = QtCore.QRect()
+        widgets = list(host.findChildren(ToolbarButton)) + list(host.findChildren(ToolbarDivider))
+        overflow = host.findChild(QtWidgets.QToolButton, "qt_toolbar_ext_button")
+        if overflow is not None and overflow.isVisible():
+            widgets.append(overflow)
+        for widget in widgets:
+            # isVisibleTo, not isVisible: 3ds Max 2022 reports a button the line pushed into >> as visible
+            if widget.isVisibleTo(host) and not widget.size().isEmpty():
+                box = box.united(QtCore.QRect(widget.mapTo(host, QtCore.QPoint(0, 0)), widget.size()))
+        if box.isNull():
+            return whole
+        return box.adjusted(-self.PAD, -self.PAD, self.PAD, self.PAD).intersected(whole)
+
+    def _along_brush(self, rect, peak):
+        """`peak` opacity of the accent along the toolbar, fading to nothing at both ends of `rect`."""
+        if self.vertical:
+            gradient = QtGui.QLinearGradient(0, rect.top(), 0, rect.bottom())
+        else:
+            gradient = QtGui.QLinearGradient(rect.left(), 0, rect.right(), 0)
+        for stop, alpha in ((0.0, 0.0), (self.EDGE_FADE, peak), (1.0 - self.EDGE_FADE, peak), (1.0, 0.0)):
+            color = QtGui.QColor(ACCENT)
+            color.setAlphaF(max(0.0, min(1.0, alpha)))
+            gradient.setColorAt(stop, color)
+        return QtGui.QBrush(gradient)
+
+    def _paint_light(self, painter, rect, progress):
+        """The wash, the sweeping band and the two lines along the toolbar, within `rect`."""
+        fade = 1.0 - progress
+        if self.strength <= 0.0 or rect.isEmpty():
+            return
+        # The wash and the band share one layer that fades out toward both ends, so neither shows an edge there.
+        ratio = self.devicePixelRatioF()
+        layer = QtGui.QImage(max(1, int(rect.width() * ratio + 0.5)), max(1, int(rect.height() * ratio + 0.5)),
+                             QtGui.QImage.Format_ARGB32_Premultiplied)
+        layer.setDevicePixelRatio(ratio)
+        layer.fill(Qt.transparent)
+        local = QtCore.QRectF(0, 0, rect.width(), rect.height())
+        light = QtGui.QPainter(layer)
+        wash = QtGui.QColor(ACCENT)
+        wash.setAlphaF(0.32 * self.strength * fade ** 1.6)
+        light.fillRect(local, wash)
+        along = local.height() if self.vertical else local.width()
+        sweep = progress / 0.7
+        if sweep < 1.0:
+            band = max(60.0, along * 0.35)
+            center = -band + (along + 2 * band) * _ease_in_out(sweep)
+            if self.vertical:
+                gradient = QtGui.QLinearGradient(0, center - band / 2, 0, center + band / 2)
+            else:
+                gradient = QtGui.QLinearGradient(center - band / 2, 0, center + band / 2, 0)
+            for stop, alpha in ((0.0, 0.0), (0.5, 0.55 * self.strength * (1.0 - 0.5 * sweep)), (1.0, 0.0)):
+                color = QtGui.QColor(ACCENT)
+                color.setAlphaF(alpha)
+                gradient.setColorAt(stop, color)
+            light.fillRect(local, QtGui.QBrush(gradient))
+        light.setCompositionMode(QtGui.QPainter.CompositionMode_DestinationIn)
+        light.fillRect(local, self._along_brush(local, 1.0))
+        light.end()
+        painter.drawImage(rect.topLeft(), layer)
+        half = self.LINE_WIDTH / 2.0
+        if self.vertical:
+            lines = ((rect.left() + half, rect.top(), rect.left() + half, rect.bottom()),
+                     (rect.right() - half, rect.top(), rect.right() - half, rect.bottom()))
+        else:
+            lines = ((rect.left(), rect.top() + half, rect.right(), rect.top() + half),
+                     (rect.left(), rect.bottom() - half, rect.right(), rect.bottom() - half))
+        painter.setPen(QtGui.QPen(self._along_brush(rect, 0.9 * self.strength * fade ** 2), self.LINE_WIDTH))
+        for x1, y1, x2, y2 in lines:
+            painter.drawLine(QtCore.QPointF(x1, y1), QtCore.QPointF(x2, y2))
+
     def _step(self, value):
         self.progress = float(value)
         host = self.parentWidget()
@@ -744,29 +827,7 @@ class ToolbarGlow(QtWidgets.QWidget):
         accent = QtGui.QColor(ACCENT)
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        rect = QtCore.QRectF(self.rect())
-        along = rect.height() if self.vertical else rect.width()
-        wash = QtGui.QColor(accent)
-        wash.setAlphaF(0.32 * self.strength * fade ** 1.6)
-        painter.fillRect(rect, wash)
-        sweep = x / 0.7
-        if sweep < 1.0:
-            band = max(60.0, along * 0.35)
-            center = -band + (along + 2 * band) * _ease_in_out(sweep)
-            if self.vertical:
-                gradient = QtGui.QLinearGradient(0, center - band / 2, 0, center + band / 2)
-            else:
-                gradient = QtGui.QLinearGradient(center - band / 2, 0, center + band / 2, 0)
-            for stop, alpha in ((0.0, 0.0), (0.5, 0.55 * self.strength * (1.0 - 0.5 * sweep)), (1.0, 0.0)):
-                color = QtGui.QColor(accent)
-                color.setAlphaF(alpha)
-                gradient.setColorAt(stop, color)
-            painter.fillRect(rect, QtGui.QBrush(gradient))
-        border = QtGui.QColor(accent)
-        border.setAlphaF(0.9 * self.strength * fade ** 2)
-        painter.setPen(QtGui.QPen(border, 2))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawRect(rect.adjusted(1, 1, -1, -1))
+        self._paint_light(painter, QtCore.QRectF(self.lit_rect()), x)
         host = self.parentWidget()
         targets = []
         for widget in self.rings:

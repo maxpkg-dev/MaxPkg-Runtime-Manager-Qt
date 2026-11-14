@@ -1,11 +1,22 @@
-"""The toolbar highlight: it waits for the toolbar to be on screen, lights it, rings new buttons (in windows of their
+"""The toolbar highlight: it waits for the toolbar to be on screen, lights only its buttons (two lines along it that
+fade out at the ends, no box), rings new buttons (in windows of their
 own, so nothing cuts the rings off), lets a laser erase removed ones, and fades out. Needs Qt; skipped where there is none."""
 
 import unittest
 
 try:
     from maxpkg_runtime.qt_compat import QtCore, QtGui, QtWidgets
-    from maxpkg_runtime.ui.toolbar import ACCENT, ToolbarGlow
+    from maxpkg_runtime.ui.toolbar import ACCENT, ToolbarDivider, ToolbarGlow
+
+    class Placeholder(ToolbarDivider):
+        """Stands for a toolbar button or divider: only its place matters to the glow."""
+
+        def __init__(self, parent, geometry):
+            QtWidgets.QWidget.__init__(self, parent)
+            self.setGeometry(geometry)
+
+        def paintEvent(self, _event):
+            pass
 except ImportError:
     QtWidgets = None
 
@@ -84,6 +95,61 @@ class ToolbarGlowTests(unittest.TestCase):
 
     def global_rect(self, x, y, width, height):
         return QtCore.QRect(self.host.mapToGlobal(QtCore.QPoint(x, y)), QtCore.QSize(width, height))
+
+    def buttons(self, vertical=False, count=5):
+        """`count` buttons of 30 px from the start of the toolbar, with the rest of it empty."""
+        for index in range(count):
+            place = QtCore.QRect(5, 4 + index * 34, 30, 30) if vertical else QtCore.QRect(4 + index * 34, 5, 30, 30)
+            Placeholder(self.host, place).show()
+        return QtCore.QRect(1, 2, 36, 4 + count * 34 + 1) if vertical else QtCore.QRect(1, 2, 4 + count * 34 + 1, 36)
+
+    def test_lights_only_the_buttons_not_the_empty_toolbar(self):
+        lit = self.buttons()
+        self.host.show()
+        glow = ToolbarGlow(self.host)
+        glow.play(False, ToolbarGlow.STRONG)
+        self.assertEqual(glow.lit_rect(), QtCore.QRect(1, 2, 172, 36))
+        image = self.frame(glow, 0.05)
+        self.assertGreater(accent_pixels(image, QtCore.QRect(40, 6, 100, 28)), 200)
+        self.assertEqual(mean_alpha(image, QtCore.QRect(200, 0, 200, 40)), 0)  # the empty rest stays dark
+        self.assertLessEqual(lit.right(), 180)
+
+    def test_two_thin_lines_along_the_toolbar_fade_at_the_ends_and_no_box(self):
+        self.buttons()
+        self.host.show()
+        glow = ToolbarGlow(self.host)
+        glow.play(False, ToolbarGlow.STRONG)
+        image = self.frame(glow, 0.05)
+        middle = 88
+        line = image.pixelColor(middle, 2).alpha()
+        self.assertGreater(line, 150)  # the top line
+        self.assertGreater(image.pixelColor(middle, 37).alpha(), 150)  # the bottom one
+        self.assertLess(image.pixelColor(middle, 5).alpha(), line * 0.75)  # 2 px thick at most: lighter below
+        self.assertLess(image.pixelColor(2, 2).alpha(), 40)  # faded out at the start
+        self.assertLess(image.pixelColor(171, 2).alpha(), 40)  # and at the end
+        self.assertLess(mean_alpha(image, QtCore.QRect(1, 8, 2, 24)), 40)  # no line across the ends: no box
+
+    def test_on_a_vertical_toolbar_the_lines_run_down_its_sides(self):
+        self.host.setGeometry(-9000, -9000, 40, 400)
+        self.buttons(vertical=True)
+        self.host.show()
+        glow = ToolbarGlow(self.host)
+        glow.play(True, ToolbarGlow.STRONG)
+        image = self.frame(glow, 0.05)
+        self.assertGreater(image.pixelColor(2, 88).alpha(), 150)
+        self.assertGreater(image.pixelColor(37, 88).alpha(), 150)
+        self.assertLess(image.pixelColor(20, 2).alpha(), 40)  # no line across the top
+        self.assertEqual(mean_alpha(image, QtCore.QRect(0, 200, 40, 200)), 0)
+
+    def test_a_button_laid_out_later_is_lit_too(self):
+        self.buttons(count=2)
+        self.host.show()
+        glow = ToolbarGlow(self.host)
+        glow.play(False, ToolbarGlow.SOFT)
+        before = glow.lit_rect()
+        Placeholder(self.host, QtCore.QRect(250, 5, 30, 30)).show()
+        self.assertGreater(glow.lit_rect().right(), before.right())
+        self.assertGreaterEqual(glow.lit_rect().right(), 280)
 
     def test_rings_a_new_button_in_windows_of_their_own(self):
         self.host.show()
