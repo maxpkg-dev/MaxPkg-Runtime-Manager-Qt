@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.7
+
+- Changed: The toolbar no longer lights up when 3ds Max starts or after the Package Manager updates itself. It still lights up when you move it, change its look or open it by hand.
+
 ## 2.1.6
 
 - Changed: The toolbar highlight lights only your buttons, not the empty rest of a docked toolbar. Instead of a box it shows two thin lines along the toolbar that fade out at the ends, and the sweep stays on the buttons.
