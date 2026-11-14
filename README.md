@@ -39,7 +39,8 @@ way: the same order, the same dividers.
 float, choose big or small buttons, drag them around, hide the ones you don't need.
 
 **Stay up to date.** `Check Updates` shows what has a new version, and one click updates it, or all of them at once.
-You can also let it do this on its own. MaxPkg updates itself too, so there is nothing to download again.
+Out of the box MaxPkg does this on its own: it checks once a day and installs new versions of your scripts. Prefer to
+do it yourself? Turn off `Download updates automatically` in Settings → Updates. MaxPkg updates itself too, so there is nothing to download again.
 
 **Clean up.** Don't need a script any more? Click `Uninstall` and it's gone, buttons included. Your scenes stay as they are.
 

@@ -461,9 +461,25 @@ class Runtime(QtCore.QObject):
             if manual:
                 self._say_notice(update_check.summarize(result,
                                                         update_check.ManagerResult(update_check.MANAGER_SKIPPED)))
+            elif self.settings.download_automatically:
+                self.install_updates_automatically()
 
         self._check_packages(done)
         return True
+
+    def install_updates_automatically(self):
+        """Download updates automatically: after the automatic check, the updates it found are installed one after
+        another, each with its own message, like Update All. Not while another operation runs: the next automatic
+        check tries again. Returns how many updates were started."""
+        pending = [package.display_name for package in self.packages if package.update_available]
+        if not pending or self._stopped:
+            return 0
+        if self.operation:
+            log.info("updater", "Automatic updates wait for the next check: another operation is running")
+            return 0
+        log.info("updater", "Installing updates automatically: " + ", ".join(pending))
+        self.update_all()
+        return len(pending)
 
     def check_all_updates(self):
         """Check Updates (the Manager's header and the toolbar menu): the packages and the Package Manager itself at

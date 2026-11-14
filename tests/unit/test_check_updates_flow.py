@@ -413,6 +413,42 @@ class CheckUpdatesFlowTests(unittest.TestCase):
                                         "An update is available for Scatter Tool: 1.0.0 → 1.1.0.", "success"))
         self.assertEqual([label for label, _icon, _callback in actions], ["Update"])
 
+    # ----------------------------------------------------------------- download updates automatically
+    def automatic_check(self, newer="1.1.0"):
+        updates = []
+        self.runtime.update_all = lambda: updates.append(True) or True
+        self.assertTrue(self.runtime.check_updates(manual=False))
+        self.answer_packages(newer=newer)
+        return updates
+
+    def test_a_new_install_downloads_updates_automatically(self):
+        self.assertTrue(self.runtime.settings.download_automatically)
+        self.assertTrue(self.runtime.settings.auto_check_packages)
+
+    def test_the_automatic_check_installs_what_it_found(self):
+        self.assertEqual(self.automatic_check(), [True])
+        self.assertEqual(self.messages, [])  # each update says its own result
+
+    def test_nothing_new_installs_nothing(self):
+        self.assertEqual(self.automatic_check(newer=None), [])
+
+    def test_without_download_automatically_the_check_only_finds(self):
+        self.runtime.settings.download_automatically = False
+        self.assertEqual(self.automatic_check(), [])
+        self.assertTrue(self.runtime.packages[0].update_available)
+
+    def test_a_running_operation_leaves_the_updates_for_the_next_check(self):
+        self.runtime.operation = "Installing package..."
+        self.assertEqual(self.automatic_check(), [])
+
+    def test_check_updates_by_hand_still_asks(self):
+        updates = []
+        self.runtime.update_all = lambda: updates.append(True) or True
+        self.runtime.check_updates(manual=True)
+        self.answer_packages(newer="1.1.0")
+        self.assertEqual(updates, [])
+        self.assertTrue(self.messages)
+
 
 if __name__ == "__main__":
     unittest.main()

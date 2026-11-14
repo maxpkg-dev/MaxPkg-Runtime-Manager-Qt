@@ -37,7 +37,8 @@ _FIELDS = (
     ("notifications", "Updates", "Notifications", "bool", True, None),
     ("auto_check_packages", "Updates", "AutoCheckPackages", "bool", True, None),
     ("auto_check_runtime", "Updates", "AutoCheckRuntime", "bool", True, None),
-    ("download_automatically", "Updates", "DownloadAutomatically", "bool", False, None),
+    # A new install updates its scripts on its own (the welcome window's recommended choice); a saved choice stays.
+    ("download_automatically", "Updates", "DownloadAutomatically", "bool", True, None),
     ("last_runtime_check_utc", "Updates", "LastRuntimeCheckUtc", "str", "", None),
     ("last_package_check_utc", "Updates", "LastPackageCheckUtc", "str", "", None),
     ("package_update_cache", "Updates", "PackageCache", "list", (), None),
