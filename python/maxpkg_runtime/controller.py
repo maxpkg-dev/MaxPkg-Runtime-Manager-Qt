@@ -78,7 +78,8 @@ class Controller:
         self.runtime.settings_changed.connect(self._on_settings)
         self.toolbar = ToolbarController(self.runtime, self.themes, self.images, self.open_manager,
                                          self.open_details, self.feedback)
-        self.toolbar.start()
+        # Back with 3ds Max or after a self-update the toolbar is where the user left it: no highlight then.
+        self.toolbar.start(highlight=not (from_startup or updated_from))
         self.running = True
         if settings.auto_check_packages and self.runtime.automatic_check_due():
             self._later(AUTO_CHECK_DELAY_MS, lambda: self.runtime.check_updates(manual=False))

@@ -48,7 +48,8 @@ Card grids compute their column count from the width (1–4) instead of the fixe
   shows the buttons that do not fit. Drag its handle to another edge: the position is saved.
 - Floating: frameless tool window with the dotted grip of the HTML toolbar; clamped to the work area.
 - Never rebuilt: buttons are added, removed, reordered and restyled individually.
-- Highlight (ToolbarGlow) when the toolbar appears, moves or changes its look, and softer for a new button: a wash
+- Highlight (ToolbarGlow) when the toolbar appears, moves or changes its look, and softer for a new button (not when
+  it comes back with 3ds Max or after a self-update: it is where the user left it): a wash
   and a band sweeping along, only over the stretch with buttons (maxpkg button to the last button or `»`, measured
   every frame), never the empty rest of a docked toolbar. No box around it: two 2 px lines along the toolbar (top and
   bottom; left and right when vertical); the lines, the wash and the band fade out toward both ends.

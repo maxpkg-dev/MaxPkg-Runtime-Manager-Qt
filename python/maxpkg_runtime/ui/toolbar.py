@@ -1261,6 +1261,7 @@ class ToolbarController(QtCore.QObject):
         self._glow = None
         self._stage = None  # DragStage: animates reordering by drag
         self._look = None  # what the buttons looked like at the last sync: a change lights the toolbar up
+        self._quiet = False  # True while start() builds a toolbar that should not light up
         self._departing = {}  # guid -> (removed button still holding its place, guid of the button before it)
         self._closing = []  # animations closing the places of removed buttons
         self._closing_guids = set()
@@ -1269,9 +1270,15 @@ class ToolbarController(QtCore.QObject):
         themes.toolbar_changed.connect(self.sync)
 
     # --- lifecycle ------------------------------------------------------------------
-    def start(self):
-        self.themes.set_toolbar(self.runtime.settings.toolbar_theme)
-        self.sync()
+    def start(self, highlight=True):
+        """Build the toolbar. `highlight`: it lights up as it appears (not when it comes back with 3ds Max or after a
+        self-update: it is where the user left it). Later moves, restyles and new buttons light up as always."""
+        self._quiet = not highlight  # set_toolbar may already build it (toolbar_changed -> sync)
+        try:
+            self.themes.set_toolbar(self.runtime.settings.toolbar_theme)
+            self.sync()
+        finally:
+            self._quiet = False
 
     def stop(self):
         for signal, slot in ((self.runtime.packages_changed, self.sync), (self.runtime.settings_changed, self._on_settings),
@@ -1443,7 +1450,7 @@ class ToolbarController(QtCore.QObject):
         strip.buttons = ordered
         strip.relayout()
         self._apply_host_theme(style)
-        if placed or fresh or restyled:
+        if (placed or fresh or restyled) and not self._quiet:
             self._highlight(ToolbarGlow.STRONG)
         elif added or ghosts or hidden_removed:
             self._highlight(ToolbarGlow.SOFT if added or hidden_removed else ToolbarGlow.NONE, added, ghosts=ghosts)
