@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.8
+
+- Added: Package descriptions show maxpkg.dev's Before / After comparisons as a slider: drag or click to move the divider, or use the arrow keys, Home and End. Before, the block showed as raw text.
+
 ## 2.1.7
 
 - Changed: The toolbar no longer lights up when 3ds Max starts or after the Package Manager updates itself. It still lights up when you move it, change its look or open it by hand.
