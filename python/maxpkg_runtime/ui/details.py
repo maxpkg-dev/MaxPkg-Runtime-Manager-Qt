@@ -358,6 +358,204 @@ class DescriptionImage(QtWidgets.QWidget):
         painter.end()
 
 
+class CompareSlider(QtWidgets.QWidget):
+    """A Before / After comparison of a package description, as on maxpkg.dev: the Before picture at its own size (the
+    description width when it is wider, never enlarged), the After picture exactly over it and shown only right of a
+    divider. Pressing anywhere moves the divider there, dragging follows the pointer; Left / Right move it by 5 %,
+    Home / End to the edges. Small dark badges name the pictures in the top corners and hide while the divider covers
+    them. The mouse wheel scrolls the page. A picture that cannot be loaded shows its label in its place."""
+
+    changed = Signal(float)
+    RADIUS = 8
+    LOADING_RATIO = 9 / 16.0  # height for width until the Before picture has arrived, as for other pictures
+    LINE = 2
+    KNOB = 40
+    STEP = 0.05
+    BADGE_MARGIN = 10
+
+    def __init__(self, compare, images, themes, parent=None):
+        QtWidgets.QWidget.__init__(self, parent)
+        self.compare = compare
+        self.images = images
+        self.themes = themes
+        self.position = 0.5  # the divider, as a share of the picture's width
+        self.setCursor(Qt.SizeHorCursor)
+        self.setFocusPolicy(Qt.StrongFocus)  # the keys move the divider once it is clicked or tabbed to
+        self.setAccessibleName("{} / {} comparison".format(compare.before[0], compare.after[0]))
+        policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+        images.ready.connect(self._on_ready)
+        for _label, url in (compare.before, compare.after):
+            if url:
+                images.get(url)  # start loading both
+
+    def _picture(self, side):
+        url = side[1]
+        picture = self.images.get(url) if url else None
+        return picture if picture is not None and not picture.isNull() else None
+
+    def _failed(self, side):
+        return not side[1] or self.images.failed(side[1])
+
+    def picture_rect(self, width=None):
+        """Where the pictures go in a widget `width` wide (logical pixels): the Before picture sets it."""
+        width = self.width() if width is None else width
+        picture = self._picture(self.compare.before)
+        if picture is None:
+            return QtCore.QRectF(0, 0, width, width * self.LOADING_RATIO)
+        natural = picture.size() / max(1.0, picture.devicePixelRatioF())
+        shown = natural.scaled(min(width, natural.width()), 100000, Qt.KeepAspectRatio)
+        return QtCore.QRectF((width - shown.width()) / 2.0, 0, shown.width(), shown.height())
+
+    def divider_x(self):
+        target = self.picture_rect()
+        return target.left() + target.width() * self.position
+
+    def set_position(self, position):
+        position = max(0.0, min(1.0, float(position)))
+        if position != self.position:
+            self.position = position
+            self.update()
+            self.changed.emit(position)
+
+    def _follow(self, event):
+        target = self.picture_rect()
+        if target.width() > 0:
+            self.set_position((event_pos(event).x() - target.left()) / target.width())
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return int(round(self.picture_rect(width).height()))
+
+    def sizeHint(self):
+        return QtCore.QSize(400, self.heightForWidth(400))
+
+    def _on_ready(self, source):
+        if source in (self.compare.before[1], self.compare.after[1]):
+            self.updateGeometry()
+            self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.setFocus(Qt.MouseFocusReason)
+            self._follow(event)
+            event.accept()
+            return
+        QtWidgets.QWidget.mousePressEvent(self, event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            self._follow(event)
+            event.accept()
+            return
+        QtWidgets.QWidget.mouseMoveEvent(self, event)
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == Qt.Key_Left:
+            self.set_position(self.position - self.STEP)
+        elif key == Qt.Key_Right:
+            self.set_position(self.position + self.STEP)
+        elif key == Qt.Key_Home:
+            self.set_position(0.0)
+        elif key == Qt.Key_End:
+            self.set_position(1.0)
+        else:
+            QtWidgets.QWidget.keyPressEvent(self, event)
+            return
+        event.accept()
+
+    def badge_rects(self):
+        """(Before badge, After badge) in this widget: the top-left and top-right corners of the picture."""
+        target = self.picture_rect()
+        font = self._badge_font()
+        metrics = QtGui.QFontMetricsF(font)
+        rects = []
+        for index, side in enumerate((self.compare.before, self.compare.after)):
+            width = metrics.horizontalAdvance(side[0]) + 16 if hasattr(metrics, "horizontalAdvance") \
+                else metrics.width(side[0]) + 16
+            height = metrics.height() + 6
+            left = target.left() + self.BADGE_MARGIN if index == 0 else target.right() - self.BADGE_MARGIN - width
+            rects.append(QtCore.QRectF(left, target.top() + self.BADGE_MARGIN, width, height))
+        return rects
+
+    def _badge_font(self):
+        font = QtGui.QFont(self.font())
+        font.setPointSizeF(max(7.0, font.pointSizeF() * 0.85))
+        font.setBold(True)
+        return font
+
+    def _draw_side(self, painter, side, target, clip):
+        """One picture into `target`, painted only within `clip`; its label in its place when it cannot be shown."""
+        painter.save()
+        painter.setClipRect(clip, Qt.IntersectClip)
+        picture = self._picture(side)
+        if picture is not None:
+            # Filled without stretching: a picture of another shape (the After one) is cropped to fit, centred.
+            source = QtCore.QRectF(picture.rect())
+            if target.height() > 0 and source.height() > 0:
+                wanted = target.width() / target.height()
+                if source.width() / source.height() > wanted:
+                    width = source.height() * wanted
+                    source = QtCore.QRectF(source.left() + (source.width() - width) / 2.0, source.top(), width,
+                                           source.height())
+                else:
+                    height = source.width() / wanted
+                    source = QtCore.QRectF(source.left(), source.top() + (source.height() - height) / 2.0,
+                                           source.width(), height)
+            painter.drawPixmap(target, picture, source)
+        else:
+            painter.fillRect(target, self.themes.manager.color("surfaceSecondary"))
+            if self._failed(side):
+                painter.setPen(self.themes.manager.color("textMuted"))
+                painter.drawText(clip.intersected(target), Qt.AlignCenter, side[0])
+        painter.restore()
+
+    def paintEvent(self, _event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        target = self.picture_rect()
+        split = target.left() + target.width() * self.position
+        shape = QtGui.QPainterPath()
+        shape.addRoundedRect(target, self.RADIUS, self.RADIUS)
+        painter.setClipPath(shape)
+        self._draw_side(painter, self.compare.before, target,
+                        QtCore.QRectF(target.left(), target.top(), split - target.left(), target.height()))
+        self._draw_side(painter, self.compare.after, target,
+                        QtCore.QRectF(split, target.top(), target.right() - split, target.height()))
+        white = QtGui.QColor("#ffffff")
+        painter.fillRect(QtCore.QRectF(split - self.LINE / 2.0, target.top(), self.LINE, target.height()), white)
+        font = self._badge_font()
+        painter.setFont(font)
+        for index, (rect, side) in enumerate(zip(self.badge_rects(), (self.compare.before, self.compare.after))):
+            covered = split <= rect.right() if index == 0 else split >= rect.left()
+            if covered:
+                continue  # the other picture is over it
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QtGui.QColor(0, 0, 0, 165))
+            painter.drawRoundedRect(rect, 5, 5)
+            painter.setPen(white)
+            painter.drawText(rect, Qt.AlignCenter, side[0])
+        painter.setClipping(False)
+        knob = QtCore.QRectF(split - self.KNOB / 2.0, target.center().y() - self.KNOB / 2.0, self.KNOB, self.KNOB)
+        painter.setPen(QtGui.QPen(white, 2))
+        painter.setBrush(QtGui.QColor(0, 0, 0, 115))
+        painter.drawEllipse(knob.adjusted(1, 1, -1, -1))
+        size = 20
+        painter.drawPixmap(QtCore.QPointF(knob.center().x() - size / 2.0, knob.center().y() - size / 2.0),
+                           icons.pixmap("chevrons-left-right", white, size, self.devicePixelRatioF()))
+        if self.hasFocus():
+            focus = QtGui.QColor(self.themes.manager.color("accentHover"))
+            painter.setPen(QtGui.QPen(focus, 2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(knob.adjusted(-2, -2, 2, 2))
+        painter.end()
+
+
 class VideoThumbnail(QtWidgets.QWidget):
     """16:9 thumbnail of a package video with a round play button and the duration; a click opens the video."""
 
@@ -686,6 +884,9 @@ class DetailsPage(ScrollPage):
                 positions = [pictures.add(alt, url) for alt, url in content]
                 parts.append(self._description_pictures(positions, pictures, everything))
                 continue
+            if kind == "compare":
+                parts.append(self._description_compare(content, pictures, everything))
+                continue
             html = markdown.to_html(content, pictures)
             if html:
                 parts.append(self._description_text(html, everything))
@@ -738,6 +939,17 @@ class DetailsPage(ScrollPage):
         count = label("{} images".format(len(shots)), "Muted")
         gallery.setLayout(vbox(hbox(None, count), viewer, spacing=6, margins=(12, 10, 12, 12)))
         return gallery
+
+    def _description_compare(self, compare, pictures, everything):
+        """A Before / After comparison, with its caption under it in the description's text style."""
+        holder = QtWidgets.QWidget()
+        slider = CompareSlider(compare, self.manager_window.images, self.manager_window.themes)
+        layout = vbox(slider, spacing=6)
+        if compare.caption:
+            layout.addWidget(self._description_text("<p>" + markdown.inline(compare.caption, pictures) + "</p>",
+                                                    everything))
+        holder.setLayout(layout)
+        return holder
 
     def _links(self, package):
         themes = self.manager_window.themes

@@ -40,6 +40,7 @@ Card grids compute their column count from the width (1–4) instead of the fixe
 | Search | Clear button, Esc clears, Ctrl+F focuses | Speed |
 | Keyboard | Esc back from Details, F5 refresh, Ctrl+1/2/3 tabs, Ctrl+, Settings | Speed |
 | Details | Screenshot viewer with full-window preview (← → Esc) | — |
+| Details | `:::compare` blocks in a description (maxpkg.dev's Before / After): a drag-to-compare slider (click, drag, ← → by 5 %, Home / End), labels in the top corners, caption below; code fences and invalid blocks stay text, as on the site | Same as maxpkg.dev |
 | Toolbar | See below | — |
 
 ## Toolbar

@@ -65,6 +65,11 @@ class Request:
         return urlencode(self.fields).encode("utf-8")
 
 
+# What this Manager can show, so maxpkg.dev sends it as written (other clients get a plain fallback):
+# compare = :::compare Before / After blocks in FullDescription.
+FEATURES = "compare"
+
+
 def _common(max_year, runtime_version, channel):
     return [("max3dsMax", str(max_year)), ("runtimeVersion", runtime_version), ("channel", channel)]
 
@@ -90,7 +95,8 @@ def categories_request(max_year, runtime_version, channel="stable"):
 
 
 def details_request(reference, max_year, runtime_version, channel="stable"):
-    return Request("packages/details", [("package", reference)] + _common(max_year, runtime_version, channel))
+    return Request("packages/details", [("package", reference), ("features", FEATURES)]
+                   + _common(max_year, runtime_version, channel))
 
 
 def split_references(text):

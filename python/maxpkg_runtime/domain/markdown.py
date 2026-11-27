@@ -5,7 +5,8 @@ Covers what the site's editor produces and what GitHub-style descriptions use:
   task lists, block quotes, fenced code (``` and ~~~), horizontal rules and pipe tables with alignment;
 - inline: **bold**/__bold__, *italic*/_italic_, ~~strike~~, `code`, [links](url "title"), <autolinks>, bare
   URLs, ![images](url) inside a sentence (shown as links: QTextBrowser does not fetch remote images) and
-  backslash escapes. Pictures on lines of their own are split off by split_media() and shown as images.
+  backslash escapes. Pictures on lines of their own are split off by split_media() and shown as images, and so are
+  maxpkg.dev's :::compare Before / After blocks (read_compare, the site's readMarkdownCompare rules).
 
 All text is HTML-escaped; links keep only http(s), mailto and site-relative targets (maxpkg.dev).
 """
@@ -253,22 +254,89 @@ def image_line(line, pictures):
     return found
 
 
+# A Before / After comparison, as maxpkg.dev writes it (readMarkdownCompare in website/shared/utils/blogMarkdown.ts):
+#   :::compare
+#   ![Before label](url)
+#   ![After label](url)
+#   optional caption lines (inline Markdown), joined with spaces
+#   :::
+COMPARE_OPEN = ":::compare"
+COMPARE_CLOSE = ":::"
+COMPARE_LABELS = ("Before", "After")
+COMPARE_MAX_LINES = 40  # the closing line comes at most this many lines after the opening one
+_COMPARE_IMAGE = re.compile(r"^!\[([^\]\r\n]*)\]\(\s*(?:<([^>\s]+)>|([^\s)]+))(?:\s+[\"'][^\"'\r\n]*[\"'])?\s*\)$")
+
+
+class Compare:
+    """One Before / After comparison: (label, url) of each picture, url '' when it may not be loaded, and the caption
+    as inline Markdown."""
+
+    __slots__ = ("before", "after", "caption")
+
+    def __init__(self, before, after, caption=""):
+        self.before = before
+        self.after = after
+        self.caption = caption
+
+
+def _compare_image(line):
+    match = _COMPARE_IMAGE.match(line) if line is not None else None
+    return (match.group(1).strip(), (match.group(2) or match.group(3) or "").strip()) if match else None
+
+
+def read_compare(lines, start, pictures):
+    """(Compare, index of its closing line) for the comparison that opens at lines[start], or None when that line does
+    not start a valid one: then its lines are ordinary text, as on the site."""
+    if start >= len(lines) or lines[start].strip() != COMPARE_OPEN:
+        return None
+    end = start + 1
+    while end < len(lines) and end - start <= COMPARE_MAX_LINES and lines[end].strip() != COMPARE_CLOSE:
+        if not lines[end].strip():
+            return None
+        end += 1
+    if end >= len(lines) or lines[end].strip() != COMPARE_CLOSE:
+        return None
+    body = [line.strip() for line in lines[start + 1:end]]
+    before = _compare_image(body[0] if body else None)
+    after = _compare_image(body[1] if len(body) > 1 else None)
+    if before is None or after is None or any(_compare_image(line) for line in body[2:]):
+        return None
+    sides = []
+    for (label, source), default in zip((before, after), COMPARE_LABELS):
+        sides.append((label or default, pictures.resolve(source) if source else ""))
+    return Compare(sides[0], sides[1], " ".join(body[2:])), end
+
+
 def split_media(source, pictures):
-    """Description Markdown in reading order as ("text", markdown) and ("images", [(alt, url)]) blocks.
+    """Description Markdown in reading order as ("text", markdown), ("images", [(alt, url)]) and ("compare", Compare)
+    blocks.
 
     Like maxpkg.dev (its MarkdownRenderer), pictures on lines of their own become image blocks: pictures on
     consecutive lines are one gallery, a single one stands alone, and a blank line ends a gallery. Pictures inside a
-    sentence and in code blocks stay in the text.
+    sentence and in code blocks stay in the text. A :::compare block outside code becomes a comparison.
     """
     blocks = []
     text = []
     fence = None
-    for line in (source or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+    lines = (source or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    index = -1
+    while index + 1 < len(lines):
+        index += 1
+        line = lines[index]
         marker = _FENCE.match(line)
         if fence is None and marker:
             fence = marker.group(1)
         elif fence is not None and line.strip().startswith(fence):
             fence = None
+        elif fence is None:
+            found = read_compare(lines, index, pictures)
+            if found is not None:
+                if any(part.strip() for part in text):
+                    blocks.append(("text", "\n".join(text)))
+                text = []
+                blocks.append(("compare", found[0]))
+                index = found[1]
+                continue
         found = image_line(line, pictures) if fence is None and not marker else []
         if not found:
             text.append(line)
